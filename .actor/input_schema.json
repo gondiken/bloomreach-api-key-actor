@@ -1,0 +1,34 @@
+{
+    "title": "Bloomreach API Key Creator Input",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "projectSlug": {
+            "title": "Project Slug",
+            "type": "string",
+            "description": "The project identifier in the URL (e.g. 'temp2' from demoapp.bloomreach.com/p/temp2)",
+            "editor": "textfield"
+        },
+        "email": {
+            "title": "Email",
+            "type": "string",
+            "description": "Bloomreach login email",
+            "editor": "textfield"
+        },
+        "password": {
+            "title": "Password",
+            "type": "string",
+            "description": "Bloomreach login password",
+            "editor": "textfield",
+            "isSecret": true
+        },
+        "keyName": {
+            "title": "API Key Name",
+            "type": "string",
+            "description": "Name for the new API key (default: forge_run)",
+            "editor": "textfield",
+            "default": "forge_run"
+        }
+    },
+    "required": ["projectSlug", "email", "password"]
+}

@@ -1,0 +1,9 @@
+{
+    "actorSpecification": 1,
+    "name": "bloomreach-api-key-creator",
+    "title": "Bloomreach API Key Creator",
+    "description": "Logs into Bloomreach Engagement, navigates to API settings, creates a new API key, and returns project_token, secret_api_key, and api_key_id.",
+    "version": "1.0.0",
+    "buildTag": "latest",
+    "dockerfile": "./Dockerfile"
+}
