@@ -18,6 +18,11 @@ if (!projectSlug || !email || !password) {
 const browser = await playwright.chromium.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    proxy: {
+        server: 'http://proxy.apify.com:8000',
+        username: 'groups-RESIDENTIAL',
+        password: process.env.APIFY_PROXY_PASSWORD,
+    },
 });
 
 const context = await browser.newContext({
