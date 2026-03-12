@@ -44,12 +44,15 @@ try {
         timeout: 30000,
     });
 
-    // Step 2: Login if needed
-    if (page.url().includes('/login')) {
-        console.log('Login page detected. Current URL:', page.url());
-        
-        // Wait for page to fully render (SPA)
-        await page.waitForTimeout(5000);
+    // Step 2: Login if needed — check for login form presence (SPA may not change URL)
+    await page.waitForTimeout(5000);
+    const hasLoginForm = await page.locator('text=Log in').first().isVisible().catch(() => false);
+    const hasEmailLabel = await page.locator('text=Email address').first().isVisible().catch(() => false);
+    
+    console.log(`Login check — Log in button visible: ${hasLoginForm}, Email label visible: ${hasEmailLabel}, URL: ${page.url()}`);
+    
+    if (hasLoginForm || hasEmailLabel || page.url().includes('/login')) {
+        console.log('Login page detected.');
         await saveScreenshot('LOGIN_PAGE');
         
         // Try multiple selector strategies for email input
@@ -117,9 +120,10 @@ try {
         // Click login button
         await page.click('button:has-text("Log in"), button:has-text("Login"), button[type="submit"]');
         
-        // Wait for navigation after login
+        // Wait for login to complete — wait for login form to disappear
         console.log('Waiting for login to complete...');
-        await page.waitForURL((url) => !url.href.includes('/login'), { timeout: 30000 });
+        await page.waitForSelector('text=Email address', { state: 'hidden', timeout: 30000 });
+        await page.waitForTimeout(3000);
         console.log('Login successful. URL:', page.url());
 
         // Navigate to API settings if not already there
