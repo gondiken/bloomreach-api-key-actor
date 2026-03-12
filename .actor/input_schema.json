@@ -30,5 +30,12 @@
             "default": "forge_run"
         }
     },
-    "required": ["projectSlug", "email", "password"]
+        "cookies": {
+            "title": "Session Cookies",
+            "type": ["array", "string"],
+            "description": "Cookies from a logged-in Bloomreach session. Use browser console: JSON.stringify(await cookieStore.getAll()). If provided, email/password are not needed.",
+            "editor": "json"
+        }
+    },
+    "required": ["projectSlug"]
 }

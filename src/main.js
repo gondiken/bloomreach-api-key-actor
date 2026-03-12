@@ -9,10 +9,14 @@ const {
     email,
     password,
     keyName = 'forge_run',
+    cookies = null,
 } = input;
 
-if (!projectSlug || !email || !password) {
-    throw new Error('Missing required input: projectSlug, email, password');
+if (!projectSlug) {
+    throw new Error('Missing required input: projectSlug');
+}
+if (!cookies && (!email || !password)) {
+    throw new Error('Provide either cookies OR email+password');
 }
 
 const browser = await playwright.chromium.launch({
@@ -37,7 +41,42 @@ async function saveScreenshot(name) {
 }
 
 try {
-    // Step 1: Navigate to project (will redirect to login)
+    // Step 0: Load cookies if provided
+    if (cookies) {
+        console.log(`Loading ${Array.isArray(cookies) ? cookies.length : 'string'} cookies...`);
+        
+        let cookieArray = cookies;
+        
+        // If cookies is a string (from document.cookie), parse it
+        if (typeof cookies === 'string') {
+            cookieArray = cookies.split(';').map(c => {
+                const [name, ...rest] = c.trim().split('=');
+                return {
+                    name: name.trim(),
+                    value: rest.join('=').trim(),
+                    domain: '.bloomreach.com',
+                    path: '/',
+                };
+            });
+        }
+        
+        // If cookies are from cookieStore.getAll(), convert to Playwright format
+        if (Array.isArray(cookieArray)) {
+            const playwrightCookies = cookieArray.map(c => ({
+                name: c.name,
+                value: c.value,
+                domain: c.domain || '.bloomreach.com',
+                path: c.path || '/',
+                secure: c.secure !== undefined ? c.secure : true,
+                httpOnly: c.httpOnly || false,
+                sameSite: c.sameSite || 'Lax',
+            }));
+            await context.addCookies(playwrightCookies);
+            console.log(`Loaded ${playwrightCookies.length} cookies`);
+        }
+    }
+
+    // Step 1: Navigate to project (will redirect to login if no valid session)
     console.log('Navigating to project...');
     await page.goto(`https://demoapp.bloomreach.com/p/${projectSlug}/project-settings/api`, {
         waitUntil: 'networkidle',
