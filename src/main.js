@@ -44,86 +44,106 @@ try {
         timeout: 30000,
     });
 
-    // Step 2: Login if needed — check for login form presence (SPA may not change URL)
+    // Step 2: Login if needed — detect by looking for any visible input fields
     await page.waitForTimeout(5000);
-    const hasLoginForm = await page.locator('text=Log in').first().isVisible().catch(() => false);
-    const hasEmailLabel = await page.locator('text=Email address').first().isVisible().catch(() => false);
     
-    console.log(`Login check — Log in button visible: ${hasLoginForm}, Email label visible: ${hasEmailLabel}, URL: ${page.url()}`);
+    // Debug: dump page info
+    const pageTitle = await page.title();
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    console.log(`Page title: ${pageTitle}`);
+    console.log(`Body text (first 500): ${bodyText.substring(0, 500)}`);
     
-    if (hasLoginForm || hasEmailLabel || page.url().includes('/login')) {
-        console.log('Login page detected.');
-        await saveScreenshot('LOGIN_PAGE');
-        
-        // Try multiple selector strategies for email input
-        const emailSelectors = [
-            'input[type="email"]',
-            'input[name="email"]',
-            'input[placeholder*="mail"]',
-            'input[placeholder*="Email"]',
-            'input[autocomplete="email"]',
-            'input[id*="email"]',
-            'input[id*="Email"]',
-            '#email',
-            'form input:first-of-type',
-            'input[type="text"]',
-        ];
-        
-        let emailInput = null;
-        for (const sel of emailSelectors) {
-            const count = await page.locator(sel).count();
+    // Check for frames/iframes
+    const frames = page.frames();
+    console.log(`Number of frames: ${frames.length}`);
+    for (const f of frames) {
+        console.log(`Frame: ${f.url()}`);
+    }
+    
+    // Check if there's a password input anywhere (most reliable login indicator)
+    let loginFrame = page;
+    let foundPasswordInput = false;
+    
+    // Check main page first
+    foundPasswordInput = await page.locator('input[type="password"]').count() > 0;
+    
+    // If not found, check all iframes
+    if (!foundPasswordInput) {
+        for (const f of frames) {
+            const count = await f.locator('input[type="password"]').count().catch(() => 0);
             if (count > 0) {
-                const visible = await page.locator(sel).first().isVisible();
-                if (visible) {
-                    emailInput = sel;
-                    console.log(`Found email input with selector: ${sel}`);
-                    break;
-                }
-            }
-        }
-        
-        if (!emailInput) {
-            // Log page content for debugging
-            const html = await page.content();
-            console.log('Page HTML (first 3000 chars):', html.substring(0, 3000));
-            await saveScreenshot('ERROR_NO_EMAIL_INPUT');
-            throw new Error('Could not find email input on login page');
-        }
-        
-        await page.fill(emailInput, email);
-        
-        // Find password input
-        const passwordSelectors = [
-            'input[type="password"]',
-            'input[name="password"]',
-            '#password',
-        ];
-        
-        let passwordInput = null;
-        for (const sel of passwordSelectors) {
-            const count = await page.locator(sel).count();
-            if (count > 0) {
-                passwordInput = sel;
-                console.log(`Found password input with selector: ${sel}`);
+                loginFrame = f;
+                foundPasswordInput = true;
+                console.log(`Found password input in frame: ${f.url()}`);
                 break;
             }
         }
+    }
+    
+    console.log(`Password input found: ${foundPasswordInput}, URL: ${page.url()}`);
+    
+    if (foundPasswordInput) {
+        console.log('Login page detected.');
+        await saveScreenshot('LOGIN_PAGE');
         
-        if (!passwordInput) {
-            await saveScreenshot('ERROR_NO_PASSWORD_INPUT');
-            throw new Error('Could not find password input');
+        // Dump all inputs for debugging
+        const allInputs = await loginFrame.locator('input').all();
+        console.log(`Found ${allInputs.length} inputs on page`);
+        for (let i = 0; i < allInputs.length; i++) {
+            const type = await allInputs[i].getAttribute('type') || 'unknown';
+            const name = await allInputs[i].getAttribute('name') || 'unknown';
+            const id = await allInputs[i].getAttribute('id') || 'unknown';
+            const placeholder = await allInputs[i].getAttribute('placeholder') || 'unknown';
+            console.log(`  Input ${i}: type=${type} name=${name} id=${id} placeholder=${placeholder}`);
         }
         
-        await page.fill(passwordInput, password);
+        // Fill email — find the input right before the password input
+        // Strategy: get all visible inputs, first one is email, second is password
+        const visibleInputs = [];
+        for (const inp of allInputs) {
+            if (await inp.isVisible()) visibleInputs.push(inp);
+        }
+        console.log(`Visible inputs: ${visibleInputs.length}`);
+        
+        if (visibleInputs.length < 2) {
+            const html = await loginFrame.content();
+            console.log('Frame HTML (first 3000):', html.substring(0, 3000));
+            await saveScreenshot('ERROR_NO_INPUTS');
+            throw new Error(`Expected at least 2 visible inputs, found ${visibleInputs.length}`);
+        }
+        
+        // First visible input = email, last = password (or the one with type=password)
+        let emailIdx = 0;
+        let passwordIdx = -1;
+        for (let i = 0; i < visibleInputs.length; i++) {
+            const type = await visibleInputs[i].getAttribute('type');
+            if (type === 'password') { passwordIdx = i; break; }
+        }
+        if (passwordIdx === -1) passwordIdx = 1;
+        if (passwordIdx > 0) emailIdx = passwordIdx - 1;
+        
+        await visibleInputs[emailIdx].fill(email);
+        await visibleInputs[passwordIdx].fill(password);
         await saveScreenshot('BEFORE_LOGIN_CLICK');
         
         // Click login button
-        await page.click('button:has-text("Log in"), button:has-text("Login"), button[type="submit"]');
+        const loginBtn = await loginFrame.locator('button').filter({ hasText: /log\s*in/i }).first();
+        if (await loginBtn.count() === 0) {
+            // Fallback: any submit button
+            await loginFrame.locator('button[type="submit"]').first().click();
+        } else {
+            await loginBtn.click();
+        }
         
-        // Wait for login to complete — wait for login form to disappear
+        // Wait for login to complete — wait for password input to disappear
         console.log('Waiting for login to complete...');
-        await page.waitForSelector('text=Email address', { state: 'hidden', timeout: 30000 });
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(5000);
+        // Check if password field is gone
+        const stillLogin = await page.locator('input[type="password"]').count() > 0;
+        if (stillLogin) {
+            await saveScreenshot('LOGIN_FAILED');
+            throw new Error('Login may have failed — password input still visible after 5s');
+        }
         console.log('Login successful. URL:', page.url());
 
         // Navigate to API settings if not already there
