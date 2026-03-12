@@ -28,8 +28,7 @@
             "description": "Name for the new API key (default: forge_run)",
             "editor": "textfield",
             "default": "forge_run"
-        }
-    },
+        },
         "cookies": {
             "title": "Session Cookies",
             "type": ["array", "string"],

@@ -69,7 +69,7 @@ try {
                 path: c.path || '/',
                 secure: c.secure !== undefined ? c.secure : true,
                 httpOnly: c.httpOnly || false,
-                sameSite: c.sameSite || 'Lax',
+                sameSite: (c.sameSite || 'Lax').charAt(0).toUpperCase() + (c.sameSite || 'Lax').slice(1).toLowerCase(),
             }));
             await context.addCookies(playwrightCookies);
             console.log(`Loaded ${playwrightCookies.length} cookies`);
@@ -227,9 +227,6 @@ try {
     // Grab Project Token
     await page.waitForSelector('text=Project token', { timeout: 15000 });
     
-    // Find the input/element near "Project token" label
-    // Based on screenshot: it's an input field right after the label
-    const projectTokenInput = page.locator('input').filter({ has: page.locator(`[value]`) }).first();
     let projectToken = '';
     
     // Try to get value from inputs on the page
