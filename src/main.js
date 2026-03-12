@@ -383,29 +383,69 @@ try {
     await saveScreenshot('AFTER_CLOSE');
 
     // Step 9: Extract API Key ID for our key
-    // Find the row with our key name, get the API Key ID from it
-    const keyRow = page.locator(`tr:has-text("${keyName}"), [class*="row"]:has-text("${keyName}")`).first();
-
+    // The GROUP KEYS table uses Angular custom elements, not standard <tr>.
+    // Each row has: key name text, then an input with truncated API Key ID + copy button.
+    // Strategy: click the copy icon next to the API Key ID in the row containing our key name.
     let apiKeyId = '';
-    const rowInputs = await keyRow.locator('input').all();
-    for (const inp of rowInputs) {
+
+    // Find all inputs on the page that look like API Key IDs:
+    // - alphanumeric (not UUID with dashes = project token)
+    // - not masked with asterisks (= API Secret column)
+    // - near our key name
+    const allInputsAfterClose = await page.locator('input').all();
+    console.log(`Found ${allInputsAfterClose.length} inputs on page after close`);
+
+    for (const inp of allInputsAfterClose) {
         const val = await inp.inputValue();
-        if (val && val.length > 10 && !val.includes('*')) {
-            apiKeyId = val;
-            break;
+        if (!val || val.includes('*') || val.includes('-')) continue;
+        // API Key IDs are alphanumeric strings, different from the project token UUID
+        if (val.length >= 10 && /^[a-z0-9]+$/i.test(val)) {
+            // Check if this input is visually near our key name
+            // Get the parent/ancestor that also contains our key name text
+            const nearbyText = await inp.evaluate((el) => {
+                // Walk up to find a row-like container
+                let parent = el.parentElement;
+                for (let i = 0; i < 10 && parent; i++) {
+                    if (parent.textContent && parent.textContent.length < 500) {
+                        return parent.textContent;
+                    }
+                    parent = parent.parentElement;
+                }
+                return '';
+            });
+            console.log(`  Input val=${val.substring(0, 20)}... nearbyText includes keyName: ${nearbyText.includes(keyName)}`);
+            if (nearbyText.includes(keyName)) {
+                apiKeyId = val;
+                console.log(`Found API Key ID: ${apiKeyId}`);
+                break;
+            }
         }
     }
 
     if (!apiKeyId) {
-        // Fallback: get text content of the row's second column
-        const cells = await keyRow.locator('td, [class*="cell"]').all();
-        if (cells.length >= 2) {
-            apiKeyId = (await cells[1].textContent()).trim();
+        // Fallback: use clipboard via the copy button next to our key's API Key ID
+        console.log('Trying clipboard fallback...');
+        // Find the row-like element containing our key name, then click its copy button
+        const keyNameEl = page.locator(`text="${keyName}"`).first();
+        // The copy button is a sibling/nearby element — click the first copy icon in the same row
+        const parentRow = keyNameEl.locator('xpath=ancestor::*[contains(@class,"row") or self::tr or contains(@class,"key")]');
+        if (await parentRow.count() > 0) {
+            const copyBtn = parentRow.first().locator('button, [class*="copy"]').first();
+            if (await copyBtn.count() > 0) {
+                await copyBtn.click();
+                apiKeyId = await page.evaluate(() => navigator.clipboard.readText()).catch(() => '');
+                console.log(`API Key ID from clipboard: ${apiKeyId}`);
+            }
         }
     }
 
     if (!apiKeyId) {
         await saveScreenshot('ERROR_NO_KEY_ID');
+        // Dump all input values for debugging
+        for (const inp of allInputsAfterClose) {
+            const val = await inp.inputValue().catch(() => '');
+            if (val) console.log(`  Input: ${val.substring(0, 40)}`);
+        }
         throw new Error('Could not extract API Key ID');
     }
     console.log(`API Key ID: ${apiKeyId}`);
