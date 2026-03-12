@@ -126,25 +126,49 @@ try {
         await visibleInputs[passwordIdx].fill(password);
         await saveScreenshot('BEFORE_LOGIN_CLICK');
         
-        // Click login button
-        const loginBtn = await loginFrame.locator('button').filter({ hasText: /log\s*in/i }).first();
-        if (await loginBtn.count() === 0) {
-            // Fallback: any submit button
-            await loginFrame.locator('button[type="submit"]').first().click();
-        } else {
-            await loginBtn.click();
+        // Click login button — try multiple strategies
+        const btnSelectors = [
+            'button:has-text("Log in")',
+            'button:has-text("Login")',
+            'button[type="submit"]',
+            'input[type="submit"]',
+            '[role="button"]:has-text("Log in")',
+            'a:has-text("Log in")',
+            'div:has-text("Log in")',
+        ];
+        
+        let clicked = false;
+        for (const sel of btnSelectors) {
+            const count = await loginFrame.locator(sel).count();
+            if (count > 0) {
+                console.log(`Clicking login with selector: ${sel}`);
+                await loginFrame.locator(sel).first().click();
+                clicked = true;
+                break;
+            }
         }
         
-        // Wait for login to complete — wait for password input to disappear
-        console.log('Waiting for login to complete...');
-        await page.waitForTimeout(5000);
-        // Check if password field is gone
-        const stillLogin = await page.locator('input[type="password"]').count() > 0;
-        if (stillLogin) {
-            await saveScreenshot('LOGIN_FAILED');
-            throw new Error('Login may have failed — password input still visible after 5s');
+        if (!clicked) {
+            // Nuclear option: click by text content
+            console.log('Fallback: clicking by page.getByRole');
+            await loginFrame.getByRole('button', { name: /log in/i }).click();
         }
-        console.log('Login successful. URL:', page.url());
+        
+        await page.waitForTimeout(2000);
+        await saveScreenshot('AFTER_LOGIN_CLICK');
+        
+        // Wait for login to complete
+        console.log('Waiting for login to complete...');
+        // Wait up to 15s for password field to disappear
+        try {
+            await page.waitForSelector('input[type="password"]', { state: 'hidden', timeout: 15000 });
+            console.log('Login successful. URL:', page.url());
+        } catch {
+            await saveScreenshot('LOGIN_FAILED');
+            const bodyAfter = await page.locator('body').innerText().catch(() => '');
+            console.log('Body after login attempt:', bodyAfter.substring(0, 500));
+            throw new Error('Login failed — password input still visible after 15s');
+        }
 
         // Navigate to API settings if not already there
         if (!page.url().includes('project-settings/api')) {
