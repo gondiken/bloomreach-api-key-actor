@@ -87,9 +87,9 @@ try {
                     domain = '.' + domain;
                 }
 
-                // Capitalize sameSite for Playwright (cookieStore returns lowercase)
-                const rawSameSite = c.sameSite || 'Lax';
-                const sameSite = rawSameSite.charAt(0).toUpperCase() + rawSameSite.slice(1).toLowerCase();
+                // Normalize sameSite for Playwright (must be Strict|Lax|None)
+                const validSameSite = { strict: 'Strict', lax: 'Lax', none: 'None' };
+                const sameSite = validSameSite[(c.sameSite || '').toLowerCase()] || 'Lax';
 
                 return {
                     name: c.name,
