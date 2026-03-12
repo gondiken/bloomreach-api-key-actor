@@ -9,18 +9,11 @@
             "description": "The project identifier in the URL (e.g. 'temp2' from demoapp.bloomreach.com/p/temp2)",
             "editor": "textfield"
         },
-        "email": {
-            "title": "Email",
-            "type": "string",
-            "description": "Bloomreach login email",
-            "editor": "textfield"
-        },
-        "password": {
-            "title": "Password",
-            "type": "string",
-            "description": "Bloomreach login password",
-            "editor": "textfield",
-            "isSecret": true
+        "cookies": {
+            "title": "Session Cookies",
+            "type": ["array", "string"],
+            "description": "ALL cookies from a logged-in Bloomreach session INCLUDING httpOnly ones. Use the 'Cookie-Editor' browser extension to export. cookieStore.getAll() does NOT work (misses httpOnly session cookies).",
+            "editor": "json"
         },
         "keyName": {
             "title": "API Key Name",
@@ -29,11 +22,18 @@
             "editor": "textfield",
             "default": "forge_run"
         },
-        "cookies": {
-            "title": "Session Cookies",
-            "type": ["array", "string"],
-            "description": "Cookies from a logged-in Bloomreach session. Use browser console: JSON.stringify(await cookieStore.getAll()). If provided, email/password are not needed.",
-            "editor": "json"
+        "email": {
+            "title": "Email (fallback, blocked by CAPTCHA)",
+            "type": "string",
+            "description": "Bloomreach login email. Only needed if NOT using cookies. Currently blocked by reCAPTCHA.",
+            "editor": "textfield"
+        },
+        "password": {
+            "title": "Password (fallback, blocked by CAPTCHA)",
+            "type": "string",
+            "description": "Bloomreach login password. Only needed if NOT using cookies. Currently blocked by reCAPTCHA.",
+            "editor": "textfield",
+            "isSecret": true
         }
     },
     "required": ["projectSlug"]

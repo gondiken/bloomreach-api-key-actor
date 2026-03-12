@@ -19,20 +19,38 @@ if (!cookies && (!email || !password)) {
     throw new Error('Provide either cookies OR email+password');
 }
 
-const browser = await playwright.chromium.launch({
+// Skip proxy when using cookies — session may be tied to original IP,
+// and proxy would change it, invalidating the session
+const launchOptions = {
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    proxy: {
+};
+
+if (!cookies) {
+    launchOptions.proxy = {
         server: 'http://proxy.apify.com:8000',
         username: 'groups-RESIDENTIAL',
         password: process.env.APIFY_PROXY_PASSWORD,
-    },
-});
+    };
+    console.log('Using residential proxy (email/password login)');
+} else {
+    console.log('Skipping proxy (cookie auth — session is tied to original IP)');
+}
+
+const browser = await playwright.chromium.launch(launchOptions);
 
 const context = await browser.newContext({
     viewport: { width: 1920, height: 1080 },
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
 });
 const page = await context.newPage();
+
+// Monitor failed network requests for debugging
+page.on('response', response => {
+    if (response.status() >= 400) {
+        console.log(`HTTP ${response.status()}: ${response.url()}`);
+    }
+});
 
 async function saveScreenshot(name) {
     const buf = await page.screenshot({ fullPage: true });
@@ -44,9 +62,9 @@ try {
     // Step 0: Load cookies if provided
     if (cookies) {
         console.log(`Loading ${Array.isArray(cookies) ? cookies.length : 'string'} cookies...`);
-        
+
         let cookieArray = cookies;
-        
+
         // If cookies is a string (from document.cookie), parse it
         if (typeof cookies === 'string') {
             cookieArray = cookies.split(';').map(c => {
@@ -59,20 +77,43 @@ try {
                 };
             });
         }
-        
-        // If cookies are from cookieStore.getAll(), convert to Playwright format
+
+        // Convert to Playwright format
         if (Array.isArray(cookieArray)) {
-            const playwrightCookies = cookieArray.map(c => ({
-                name: c.name,
-                value: c.value,
-                domain: c.domain || '.bloomreach.com',
-                path: c.path || '/',
-                secure: c.secure !== undefined ? c.secure : true,
-                httpOnly: c.httpOnly || false,
-                sameSite: (c.sameSite || 'Lax').charAt(0).toUpperCase() + (c.sameSite || 'Lax').slice(1).toLowerCase(),
-            }));
+            const playwrightCookies = cookieArray.map(c => {
+                // Ensure domain has leading dot for subdomain matching
+                let domain = c.domain || '.bloomreach.com';
+                if (domain && !domain.startsWith('.') && !domain.match(/^\d/)) {
+                    domain = '.' + domain;
+                }
+
+                // Capitalize sameSite for Playwright (cookieStore returns lowercase)
+                const rawSameSite = c.sameSite || 'Lax';
+                const sameSite = rawSameSite.charAt(0).toUpperCase() + rawSameSite.slice(1).toLowerCase();
+
+                return {
+                    name: c.name,
+                    value: c.value,
+                    domain,
+                    path: c.path || '/',
+                    secure: c.secure !== undefined ? c.secure : true,
+                    httpOnly: c.httpOnly || false,
+                    sameSite,
+                };
+            });
+
             await context.addCookies(playwrightCookies);
             console.log(`Loaded ${playwrightCookies.length} cookies`);
+
+            // Log cookie names for debugging (not values)
+            const httpOnlyCount = playwrightCookies.filter(c => c.httpOnly).length;
+            console.log(`Cookie names: ${playwrightCookies.map(c => c.name).join(', ')}`);
+            console.log(`httpOnly cookies: ${httpOnlyCount}/${playwrightCookies.length}`);
+            if (httpOnlyCount === 0) {
+                console.warn('WARNING: No httpOnly cookies found! Session cookies are usually httpOnly.');
+                console.warn('cookieStore.getAll() cannot export httpOnly cookies.');
+                console.warn('Use a browser extension like "Cookie-Editor" to export ALL cookies including httpOnly ones.');
+            }
         }
     }
 
@@ -80,32 +121,65 @@ try {
     console.log('Navigating to project...');
     await page.goto(`https://demoapp.bloomreach.com/p/${projectSlug}/project-settings/api`, {
         waitUntil: 'networkidle',
-        timeout: 30000,
+        timeout: 60000,
     });
 
     // Step 2: Login if needed — detect by looking for any visible input fields
+    // Wait for page to settle — SPA may take time to render
     await page.waitForTimeout(5000);
-    
+
     // Debug: dump page info
     const pageTitle = await page.title();
+    const pageUrl = page.url();
     const bodyText = await page.locator('body').innerText().catch(() => '');
+    const bodyHtml = await page.locator('body').innerHTML().catch(() => '');
     console.log(`Page title: ${pageTitle}`);
+    console.log(`Page URL: ${pageUrl}`);
     console.log(`Body text (first 500): ${bodyText.substring(0, 500)}`);
-    
+    console.log(`Body HTML (first 1000): ${bodyHtml.substring(0, 1000)}`);
+
+    // Check if page is blank (SPA didn't render — likely auth issue)
+    if (bodyText.trim().length === 0) {
+        console.warn('WARNING: Page body is empty — SPA did not render.');
+        console.warn('This usually means cookies are missing httpOnly session cookies.');
+
+        // Try waiting longer for SPA to mount
+        console.log('Waiting 10 more seconds for SPA...');
+        await page.waitForTimeout(10000);
+
+        const bodyTextRetry = await page.locator('body').innerText().catch(() => '');
+        console.log(`Body text after retry (first 500): ${bodyTextRetry.substring(0, 500)}`);
+
+        if (bodyTextRetry.trim().length === 0) {
+            await saveScreenshot('ERROR_BLANK_PAGE');
+
+            // Dump all cookies currently in the browser for debugging
+            const currentCookies = await context.cookies();
+            console.log(`Browser has ${currentCookies.length} cookies total`);
+            console.log(`Cookie names in browser: ${currentCookies.map(c => `${c.name} (${c.domain})`).join(', ')}`);
+
+            throw new Error(
+                'Page is blank after cookie injection. The session cookies (httpOnly) were likely not exported. ' +
+                'Use a browser extension like "Cookie-Editor" (Chrome/Firefox) to export ALL cookies including httpOnly ones. ' +
+                'cookieStore.getAll() in DevTools does NOT include httpOnly cookies.'
+            );
+        }
+    }
+
     // Check for frames/iframes
     const frames = page.frames();
     console.log(`Number of frames: ${frames.length}`);
     for (const f of frames) {
         console.log(`Frame: ${f.url()}`);
     }
-    
+
     // Check if there's a password input anywhere (most reliable login indicator)
     let loginFrame = page;
     let foundPasswordInput = false;
-    
+
     // Check main page first
     foundPasswordInput = await page.locator('input[type="password"]').count() > 0;
-    
+
     // If not found, check all iframes
     if (!foundPasswordInput) {
         for (const f of frames) {
@@ -118,13 +192,13 @@ try {
             }
         }
     }
-    
+
     console.log(`Password input found: ${foundPasswordInput}, URL: ${page.url()}`);
-    
+
     if (foundPasswordInput) {
         console.log('Login page detected.');
         await saveScreenshot('LOGIN_PAGE');
-        
+
         // Dump all inputs for debugging
         const allInputs = await loginFrame.locator('input').all();
         console.log(`Found ${allInputs.length} inputs on page`);
@@ -135,7 +209,7 @@ try {
             const placeholder = await allInputs[i].getAttribute('placeholder') || 'unknown';
             console.log(`  Input ${i}: type=${type} name=${name} id=${id} placeholder=${placeholder}`);
         }
-        
+
         // Fill email — find the input right before the password input
         // Strategy: get all visible inputs, first one is email, second is password
         const visibleInputs = [];
@@ -143,14 +217,14 @@ try {
             if (await inp.isVisible()) visibleInputs.push(inp);
         }
         console.log(`Visible inputs: ${visibleInputs.length}`);
-        
+
         if (visibleInputs.length < 2) {
             const html = await loginFrame.content();
             console.log('Frame HTML (first 3000):', html.substring(0, 3000));
             await saveScreenshot('ERROR_NO_INPUTS');
             throw new Error(`Expected at least 2 visible inputs, found ${visibleInputs.length}`);
         }
-        
+
         // First visible input = email, last = password (or the one with type=password)
         let emailIdx = 0;
         let passwordIdx = -1;
@@ -160,11 +234,11 @@ try {
         }
         if (passwordIdx === -1) passwordIdx = 1;
         if (passwordIdx > 0) emailIdx = passwordIdx - 1;
-        
+
         await visibleInputs[emailIdx].fill(email);
         await visibleInputs[passwordIdx].fill(password);
         await saveScreenshot('BEFORE_LOGIN_CLICK');
-        
+
         // Click login button — try multiple strategies
         const btnSelectors = [
             'button:has-text("Log in")',
@@ -175,7 +249,7 @@ try {
             'a:has-text("Log in")',
             'div:has-text("Log in")',
         ];
-        
+
         let clicked = false;
         for (const sel of btnSelectors) {
             const count = await loginFrame.locator(sel).count();
@@ -186,16 +260,16 @@ try {
                 break;
             }
         }
-        
+
         if (!clicked) {
             // Nuclear option: click by text content
             console.log('Fallback: clicking by page.getByRole');
             await loginFrame.getByRole('button', { name: /log in/i }).click();
         }
-        
+
         await page.waitForTimeout(2000);
         await saveScreenshot('AFTER_LOGIN_CLICK');
-        
+
         // Wait for login to complete
         console.log('Waiting for login to complete...');
         // Wait up to 15s for password field to disappear
@@ -226,12 +300,12 @@ try {
 
     // Grab Project Token
     await page.waitForSelector('text=Project token', { timeout: 15000 });
-    
+
     let projectToken = '';
-    
+
     // Try to get value from inputs on the page
-    const allInputs = await page.locator('input[readonly], input[disabled], input.read-only').all();
-    for (const inp of allInputs) {
+    const allPageInputs = await page.locator('input[readonly], input[disabled], input.read-only').all();
+    for (const inp of allPageInputs) {
         const val = await inp.inputValue();
         // Project token is a UUID pattern
         if (val && val.match(/^[a-f0-9-]{36}$/)) {
@@ -240,7 +314,7 @@ try {
             break;
         }
     }
-    
+
     if (!projectToken) {
         // Fallback: look for text content matching UUID near "Project token"
         const pageText = await page.textContent('body');
@@ -273,7 +347,7 @@ try {
 
     // Step 7: Extract secret API key
     await page.waitForSelector('text=Secret API key', { timeout: 10000 });
-    
+
     // The secret is in a read-only input in the modal
     let secretApiKey = '';
     const modalInputs = await page.locator('.modal input, [role="dialog"] input, [class*="modal"] input, [class*="dialog"] input').all();
@@ -284,7 +358,7 @@ try {
             break;
         }
     }
-    
+
     if (!secretApiKey) {
         // Fallback: find any long alphanumeric string on the page that's new
         const inputs = await page.locator('input').all();
@@ -296,7 +370,7 @@ try {
             }
         }
     }
-    
+
     if (!secretApiKey) {
         await saveScreenshot('ERROR_NO_SECRET');
         throw new Error('Could not extract secret API key');
@@ -311,7 +385,7 @@ try {
     // Step 9: Extract API Key ID for our key
     // Find the row with our key name, get the API Key ID from it
     const keyRow = page.locator(`tr:has-text("${keyName}"), [class*="row"]:has-text("${keyName}")`).first();
-    
+
     let apiKeyId = '';
     const rowInputs = await keyRow.locator('input').all();
     for (const inp of rowInputs) {
@@ -321,7 +395,7 @@ try {
             break;
         }
     }
-    
+
     if (!apiKeyId) {
         // Fallback: get text content of the row's second column
         const cells = await keyRow.locator('td, [class*="cell"]').all();
@@ -329,7 +403,7 @@ try {
             apiKeyId = (await cells[1].textContent()).trim();
         }
     }
-    
+
     if (!apiKeyId) {
         await saveScreenshot('ERROR_NO_KEY_ID');
         throw new Error('Could not extract API Key ID');
