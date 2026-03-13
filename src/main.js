@@ -258,107 +258,83 @@ try {
         await projectNameInput.fill(newProjectName);
 
         // Step 1.3: Select "Sandbox" from Project type dropdown
-        // All dropdowns are custom Angular components (0 native <select> elements)
+        // Component tree: <e-select-box> > <e-ui-button> > <button.button-wrapper>
         console.log('Selecting Sandbox project type...');
 
-        // Dump wide HTML: walk up from "Select project type" text to find the full component
-        const dropdownDebug = await page.evaluate(() => {
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-            while (walker.nextNode()) {
-                if (walker.currentNode.textContent.trim() === 'Select project type') {
-                    let el = walker.currentNode.parentElement;
-                    const ancestors = [];
-                    for (let i = 0; i < 8 && el; i++) {
-                        ancestors.push({
-                            level: i,
-                            tag: el.tagName.toLowerCase(),
-                            class: el.className?.toString?.().substring(0, 100) || '',
-                            id: el.id || '',
-                            childCount: el.children.length,
-                            boundingRect: el.getBoundingClientRect ? {
-                                x: Math.round(el.getBoundingClientRect().x),
-                                y: Math.round(el.getBoundingClientRect().y),
-                                w: Math.round(el.getBoundingClientRect().width),
-                                h: Math.round(el.getBoundingClientRect().height),
-                            } : null,
-                        });
-                        el = el.parentElement;
-                    }
-                    return ancestors;
+        // Blur the project name input first (it may interfere with dropdown)
+        await page.locator('body').click({ position: { x: 0, y: 0 } });
+        await page.waitForTimeout(300);
+
+        // Try multiple Playwright click strategies on the actual component elements
+        const clickStrategies = [
+            { desc: 'e-select-box component', locator: 'e-select-box:has-text("Select project type")' },
+            { desc: 'e-ui-button component', locator: 'e-ui-button:has-text("Select project type")' },
+            { desc: 'button.button-wrapper', locator: 'button.button-wrapper:has-text("Select project type")' },
+            { desc: 'text locator', locator: 'text=Select project type' },
+        ];
+
+        let dropdownOpened = false;
+        for (const strategy of clickStrategies) {
+            const loc = page.locator(strategy.locator).first();
+            const count = await loc.count();
+            console.log(`Strategy "${strategy.desc}": count=${count}`);
+
+            if (count > 0) {
+                await loc.click({ timeout: 5000 }).catch(async (e) => {
+                    console.log(`  Regular click failed: ${e.message.substring(0, 80)}, trying force`);
+                    await loc.click({ force: true, timeout: 5000 }).catch(() => {});
+                });
+                await page.waitForTimeout(1000);
+
+                // Check if dropdown options appeared
+                const hasSandbox = await page.getByText('Sandbox', { exact: true }).isVisible().catch(() => false);
+                console.log(`  After "${strategy.desc}" click: Sandbox visible = ${hasSandbox}`);
+
+                if (hasSandbox) {
+                    dropdownOpened = true;
+                    break;
+                }
+
+                // Also check if options appeared anywhere in the DOM (even if not visible)
+                const sandboxInDom = await page.evaluate(() => {
+                    return [...document.querySelectorAll('*')].some(
+                        el => el.children.length === 0 && el.textContent?.trim() === 'Sandbox'
+                    );
+                });
+                console.log(`  Sandbox in DOM: ${sandboxInDom}`);
+
+                if (sandboxInDom) {
+                    dropdownOpened = true;
+                    break;
                 }
             }
-            return [];
-        });
-        console.log('Dropdown ancestors (from text "Select project type"):');
-        for (const a of dropdownDebug) {
-            console.log(`  [${a.level}] <${a.tag}> class="${a.class}" id="${a.id}" children=${a.childCount} rect=${JSON.stringify(a.boundingRect)}`);
         }
 
-        // The dropdown visual element (with border + chevron) is likely one of the ancestors
-        // with a reasonable bounding box (width ~200-300px, height ~35-45px)
-        // Click the ancestor that looks like the full dropdown trigger
-        let dropdownClicked = false;
-        for (const a of dropdownDebug) {
-            if (a.boundingRect && a.boundingRect.w > 150 && a.boundingRect.h > 25 && a.boundingRect.h < 60) {
-                console.log(`Clicking dropdown ancestor: <${a.tag}> class="${a.class}" at (${a.boundingRect.x + a.boundingRect.w/2}, ${a.boundingRect.y + a.boundingRect.h/2})`);
-                await page.mouse.click(a.boundingRect.x + a.boundingRect.w / 2, a.boundingRect.y + a.boundingRect.h / 2);
-                dropdownClicked = true;
-                break;
+        if (!dropdownOpened) {
+            // Last resort: use keyboard navigation
+            console.log('Trying keyboard navigation...');
+            const selectBox = page.locator('e-select-box:has-text("Select project type")').first();
+            if (await selectBox.count() > 0) {
+                await selectBox.focus().catch(() => {});
+                await page.keyboard.press('Enter');
+                await page.waitForTimeout(1000);
+                await page.keyboard.press('Space');
+                await page.waitForTimeout(1000);
             }
+
+            const hasSandbox = await page.getByText('Sandbox', { exact: true }).isVisible().catch(() => false);
+            console.log(`After keyboard: Sandbox visible = ${hasSandbox}`);
+            if (hasSandbox) dropdownOpened = true;
         }
 
-        if (!dropdownClicked) {
-            // Fallback: click the text directly
-            console.log('Fallback: clicking "Select project type" text');
-            await page.locator('text=Select project type').first().click({ force: true });
-        }
-
-        await page.waitForTimeout(1500);
         await saveScreenshot('DROPDOWN_OPENED');
 
-        // Look for "Sandbox" option that should now be visible
-        const sandboxVisible = await page.getByText('Sandbox', { exact: true }).isVisible().catch(() => false);
-        console.log(`Sandbox option visible after click: ${sandboxVisible}`);
-
-        if (sandboxVisible) {
+        if (dropdownOpened) {
             await page.getByText('Sandbox', { exact: true }).click();
-            console.log('Clicked Sandbox option');
+            console.log('Selected Sandbox');
         } else {
-            // Dump ALL elements on page that contain "Sandbox"
-            const sandboxElements = await page.evaluate(() => {
-                return [...document.querySelectorAll('*')]
-                    .filter(el => el.textContent?.trim() === 'Sandbox' || el.innerText?.trim() === 'Sandbox')
-                    .map(el => ({
-                        tag: el.tagName.toLowerCase(),
-                        class: el.className?.toString?.().substring(0, 80),
-                        visible: el.offsetParent !== null,
-                        rect: el.getBoundingClientRect ? {
-                            x: Math.round(el.getBoundingClientRect().x),
-                            y: Math.round(el.getBoundingClientRect().y),
-                            w: Math.round(el.getBoundingClientRect().width),
-                            h: Math.round(el.getBoundingClientRect().height),
-                        } : null,
-                    }));
-            });
-            console.log(`Elements with "Sandbox" text: ${JSON.stringify(sandboxElements)}`);
-
-            // Try clicking via evaluate
-            const clicked = await page.evaluate(() => {
-                const els = [...document.querySelectorAll('*')];
-                for (const el of els) {
-                    if (el.children.length === 0 && el.textContent?.trim() === 'Sandbox' && el.offsetParent !== null) {
-                        el.click();
-                        return true;
-                    }
-                }
-                return false;
-            });
-            console.log(`Clicked Sandbox via evaluate: ${clicked}`);
-
-            if (!clicked) {
-                await saveScreenshot('ERROR_PROJECT_TYPE');
-                throw new Error('Could not find and click Sandbox option');
-            }
+            await saveScreenshot('ERROR_PROJECT_TYPE');
+            throw new Error('Could not open Project type dropdown');
         }
 
         await page.waitForTimeout(500);
