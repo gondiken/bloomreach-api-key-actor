@@ -1,18 +1,31 @@
 {
-    "title": "Bloomreach API Key Creator Input",
+    "title": "Bloomreach Project & API Key Creator",
     "type": "object",
     "schemaVersion": 1,
     "properties": {
-        "projectSlug": {
-            "title": "Project Slug",
+        "newProjectName": {
+            "title": "New Project Name",
             "type": "string",
-            "description": "The project identifier in the URL (e.g. 'temp2' from demoapp.bloomreach.com/p/temp2)",
+            "description": "Name for a new Bloomreach project to create. If provided, a new Sandbox project will be created before generating API keys. Leave empty to use an existing project.",
+            "editor": "textfield"
+        },
+        "sourceProject": {
+            "title": "Source Project (for cloning)",
+            "type": "string",
+            "description": "Existing project to copy data structure from when creating a new project (default: temp2)",
+            "editor": "textfield",
+            "default": "temp2"
+        },
+        "projectSlug": {
+            "title": "Existing Project Slug",
+            "type": "string",
+            "description": "Use an existing project instead of creating a new one. The project identifier in the URL (e.g. 'temp2'). Only needed if newProjectName is not provided.",
             "editor": "textfield"
         },
         "cookies": {
             "title": "Session Cookies",
             "type": ["array", "string"],
-            "description": "ALL cookies from a logged-in Bloomreach session INCLUDING httpOnly ones. Use the 'Cookie-Editor' browser extension to export. cookieStore.getAll() does NOT work (misses httpOnly session cookies).",
+            "description": "ALL cookies from a logged-in Bloomreach session INCLUDING httpOnly ones. Use the 'Cookie-Editor' browser extension to export.",
             "editor": "json"
         },
         "keyName": {
@@ -25,16 +38,16 @@
         "email": {
             "title": "Email (fallback, blocked by CAPTCHA)",
             "type": "string",
-            "description": "Bloomreach login email. Only needed if NOT using cookies. Currently blocked by reCAPTCHA.",
+            "description": "Bloomreach login email. Only needed if NOT using cookies.",
             "editor": "textfield"
         },
         "password": {
             "title": "Password (fallback, blocked by CAPTCHA)",
             "type": "string",
-            "description": "Bloomreach login password. Only needed if NOT using cookies. Currently blocked by reCAPTCHA.",
+            "description": "Bloomreach login password. Only needed if NOT using cookies.",
             "editor": "textfield",
             "isSecret": true
         }
     },
-    "required": ["projectSlug"]
+    "required": []
 }

@@ -5,22 +5,25 @@ await Actor.init();
 
 const input = await Actor.getInput();
 const {
-    projectSlug,
+    newProjectName = null,
+    sourceProject = 'temp2',
+    projectSlug = null,
     email,
     password,
     keyName = 'forge_run',
     cookies = null,
 } = input;
 
-if (!projectSlug) {
-    throw new Error('Missing required input: projectSlug');
+// Determine which project to create the API key in
+const targetProject = newProjectName || projectSlug;
+if (!targetProject) {
+    throw new Error('Provide either newProjectName (to create a new project) or projectSlug (to use existing)');
 }
 if (!cookies && (!email || !password)) {
     throw new Error('Provide either cookies OR email+password');
 }
 
-// Skip proxy when using cookies — session may be tied to original IP,
-// and proxy would change it, invalidating the session
+// Skip proxy when using cookies — session may be tied to original IP
 const launchOptions = {
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -58,234 +61,274 @@ async function saveScreenshot(name) {
     console.log(`Screenshot saved: ${name}`);
 }
 
-try {
-    // Step 0: Load cookies if provided
-    if (cookies) {
-        console.log(`Loading ${Array.isArray(cookies) ? cookies.length : 'string'} cookies...`);
+// Helper: load cookies into browser context
+async function loadCookies() {
+    if (!cookies) return;
 
-        let cookieArray = cookies;
+    console.log(`Loading ${Array.isArray(cookies) ? cookies.length : 'string'} cookies...`);
 
-        // If cookies is a string (from document.cookie), parse it
-        if (typeof cookies === 'string') {
-            cookieArray = cookies.split(';').map(c => {
-                const [name, ...rest] = c.trim().split('=');
-                return {
-                    name: name.trim(),
-                    value: rest.join('=').trim(),
-                    domain: '.bloomreach.com',
-                    path: '/',
-                };
-            });
-        }
+    let cookieArray = cookies;
 
-        // Convert to Playwright format
-        if (Array.isArray(cookieArray)) {
-            const playwrightCookies = cookieArray.map(c => {
-                // Ensure domain has leading dot for subdomain matching
-                let domain = c.domain || '.bloomreach.com';
-                if (domain && !domain.startsWith('.') && !domain.match(/^\d/)) {
-                    domain = '.' + domain;
-                }
-
-                // Normalize sameSite for Playwright (must be Strict|Lax|None)
-                const validSameSite = { strict: 'Strict', lax: 'Lax', none: 'None' };
-                const sameSite = validSameSite[(c.sameSite || '').toLowerCase()] || 'Lax';
-
-                return {
-                    name: c.name,
-                    value: c.value,
-                    domain,
-                    path: c.path || '/',
-                    secure: c.secure !== undefined ? c.secure : true,
-                    httpOnly: c.httpOnly || false,
-                    sameSite,
-                };
-            });
-
-            await context.addCookies(playwrightCookies);
-            console.log(`Loaded ${playwrightCookies.length} cookies`);
-
-            // Log cookie names for debugging (not values)
-            const httpOnlyCount = playwrightCookies.filter(c => c.httpOnly).length;
-            console.log(`Cookie names: ${playwrightCookies.map(c => c.name).join(', ')}`);
-            console.log(`httpOnly cookies: ${httpOnlyCount}/${playwrightCookies.length}`);
-            if (httpOnlyCount === 0) {
-                console.warn('WARNING: No httpOnly cookies found! Session cookies are usually httpOnly.');
-                console.warn('cookieStore.getAll() cannot export httpOnly cookies.');
-                console.warn('Use a browser extension like "Cookie-Editor" to export ALL cookies including httpOnly ones.');
-            }
-        }
+    if (typeof cookies === 'string') {
+        cookieArray = cookies.split(';').map(c => {
+            const [name, ...rest] = c.trim().split('=');
+            return {
+                name: name.trim(),
+                value: rest.join('=').trim(),
+                domain: '.bloomreach.com',
+                path: '/',
+            };
+        });
     }
 
-    // Step 1: Navigate to project (will redirect to login if no valid session)
-    console.log('Navigating to project...');
-    await page.goto(`https://demoapp.bloomreach.com/p/${projectSlug}/project-settings/api`, {
-        waitUntil: 'networkidle',
-        timeout: 60000,
-    });
+    if (Array.isArray(cookieArray)) {
+        const playwrightCookies = cookieArray.map(c => {
+            let domain = c.domain || '.bloomreach.com';
+            if (domain && !domain.startsWith('.') && !domain.match(/^\d/)) {
+                domain = '.' + domain;
+            }
+            const validSameSite = { strict: 'Strict', lax: 'Lax', none: 'None' };
+            const sameSite = validSameSite[(c.sameSite || '').toLowerCase()] || 'Lax';
 
-    // Step 2: Login if needed — detect by looking for any visible input fields
-    // Wait for page to settle — SPA may take time to render
+            return {
+                name: c.name,
+                value: c.value,
+                domain,
+                path: c.path || '/',
+                secure: c.secure !== undefined ? c.secure : true,
+                httpOnly: c.httpOnly || false,
+                sameSite,
+            };
+        });
+
+        await context.addCookies(playwrightCookies);
+        console.log(`Loaded ${playwrightCookies.length} cookies`);
+
+        const httpOnlyCount = playwrightCookies.filter(c => c.httpOnly).length;
+        console.log(`Cookie names: ${playwrightCookies.map(c => c.name).join(', ')}`);
+        console.log(`httpOnly cookies: ${httpOnlyCount}/${playwrightCookies.length}`);
+        if (httpOnlyCount === 0) {
+            console.warn('WARNING: No httpOnly cookies found! Session cookies are usually httpOnly.');
+            console.warn('Use a browser extension like "Cookie-Editor" to export ALL cookies including httpOnly ones.');
+        }
+    }
+}
+
+// Helper: handle login if needed
+async function handleLoginIfNeeded() {
     await page.waitForTimeout(5000);
 
-    // Debug: dump page info
-    const pageTitle = await page.title();
-    const pageUrl = page.url();
     const bodyText = await page.locator('body').innerText().catch(() => '');
-    const bodyHtml = await page.locator('body').innerHTML().catch(() => '');
-    console.log(`Page title: ${pageTitle}`);
-    console.log(`Page URL: ${pageUrl}`);
-    console.log(`Body text (first 500): ${bodyText.substring(0, 500)}`);
-    console.log(`Body HTML (first 1000): ${bodyHtml.substring(0, 1000)}`);
+    console.log(`Page title: ${await page.title()}`);
+    console.log(`Page URL: ${page.url()}`);
+    console.log(`Body text (first 300): ${bodyText.substring(0, 300)}`);
 
-    // Check if page is blank (SPA didn't render — likely auth issue)
+    // Check if page is blank (SPA didn't render)
     if (bodyText.trim().length === 0) {
         console.warn('WARNING: Page body is empty — SPA did not render.');
-        console.warn('This usually means cookies are missing httpOnly session cookies.');
-
-        // Try waiting longer for SPA to mount
         console.log('Waiting 10 more seconds for SPA...');
         await page.waitForTimeout(10000);
 
         const bodyTextRetry = await page.locator('body').innerText().catch(() => '');
-        console.log(`Body text after retry (first 500): ${bodyTextRetry.substring(0, 500)}`);
-
         if (bodyTextRetry.trim().length === 0) {
             await saveScreenshot('ERROR_BLANK_PAGE');
-
-            // Dump all cookies currently in the browser for debugging
-            const currentCookies = await context.cookies();
-            console.log(`Browser has ${currentCookies.length} cookies total`);
-            console.log(`Cookie names in browser: ${currentCookies.map(c => `${c.name} (${c.domain})`).join(', ')}`);
-
             throw new Error(
-                'Page is blank after cookie injection. The session cookies (httpOnly) were likely not exported. ' +
-                'Use a browser extension like "Cookie-Editor" (Chrome/Firefox) to export ALL cookies including httpOnly ones. ' +
-                'cookieStore.getAll() in DevTools does NOT include httpOnly cookies.'
+                'Page is blank after cookie injection. Use "Cookie-Editor" browser extension to export ALL cookies including httpOnly ones.'
             );
         }
     }
 
-    // Check for frames/iframes
-    const frames = page.frames();
-    console.log(`Number of frames: ${frames.length}`);
-    for (const f of frames) {
-        console.log(`Frame: ${f.url()}`);
-    }
-
-    // Check if there's a password input anywhere (most reliable login indicator)
+    // Check for login page
     let loginFrame = page;
-    let foundPasswordInput = false;
+    let foundPasswordInput = await page.locator('input[type="password"]').count() > 0;
 
-    // Check main page first
-    foundPasswordInput = await page.locator('input[type="password"]').count() > 0;
-
-    // If not found, check all iframes
     if (!foundPasswordInput) {
-        for (const f of frames) {
+        for (const f of page.frames()) {
             const count = await f.locator('input[type="password"]').count().catch(() => 0);
             if (count > 0) {
                 loginFrame = f;
                 foundPasswordInput = true;
-                console.log(`Found password input in frame: ${f.url()}`);
                 break;
             }
         }
     }
 
-    console.log(`Password input found: ${foundPasswordInput}, URL: ${page.url()}`);
+    if (!foundPasswordInput) return; // Already logged in
 
-    if (foundPasswordInput) {
-        console.log('Login page detected.');
-        await saveScreenshot('LOGIN_PAGE');
+    console.log('Login page detected.');
+    await saveScreenshot('LOGIN_PAGE');
 
-        // Dump all inputs for debugging
-        const allInputs = await loginFrame.locator('input').all();
-        console.log(`Found ${allInputs.length} inputs on page`);
-        for (let i = 0; i < allInputs.length; i++) {
-            const type = await allInputs[i].getAttribute('type') || 'unknown';
-            const name = await allInputs[i].getAttribute('name') || 'unknown';
-            const id = await allInputs[i].getAttribute('id') || 'unknown';
-            const placeholder = await allInputs[i].getAttribute('placeholder') || 'unknown';
-            console.log(`  Input ${i}: type=${type} name=${name} id=${id} placeholder=${placeholder}`);
+    const allInputs = await loginFrame.locator('input').all();
+    const visibleInputs = [];
+    for (const inp of allInputs) {
+        if (await inp.isVisible()) visibleInputs.push(inp);
+    }
+
+    if (visibleInputs.length < 2) {
+        await saveScreenshot('ERROR_NO_INPUTS');
+        throw new Error(`Expected at least 2 visible inputs, found ${visibleInputs.length}`);
+    }
+
+    let emailIdx = 0;
+    let passwordIdx = -1;
+    for (let i = 0; i < visibleInputs.length; i++) {
+        const type = await visibleInputs[i].getAttribute('type');
+        if (type === 'password') { passwordIdx = i; break; }
+    }
+    if (passwordIdx === -1) passwordIdx = 1;
+    if (passwordIdx > 0) emailIdx = passwordIdx - 1;
+
+    await visibleInputs[emailIdx].fill(email);
+    await visibleInputs[passwordIdx].fill(password);
+    await saveScreenshot('BEFORE_LOGIN_CLICK');
+
+    const btnSelectors = [
+        'button:has-text("Log in")',
+        'button:has-text("Login")',
+        'button[type="submit"]',
+        'input[type="submit"]',
+    ];
+
+    let clicked = false;
+    for (const sel of btnSelectors) {
+        if (await loginFrame.locator(sel).count() > 0) {
+            await loginFrame.locator(sel).first().click();
+            clicked = true;
+            break;
+        }
+    }
+    if (!clicked) {
+        await loginFrame.getByRole('button', { name: /log in/i }).click();
+    }
+
+    await page.waitForTimeout(2000);
+    await saveScreenshot('AFTER_LOGIN_CLICK');
+
+    try {
+        await page.waitForSelector('input[type="password"]', { state: 'hidden', timeout: 15000 });
+        console.log('Login successful. URL:', page.url());
+    } catch {
+        await saveScreenshot('LOGIN_FAILED');
+        throw new Error('Login failed — password input still visible after 15s');
+    }
+}
+
+try {
+    // ========== PHASE 0: Load cookies ==========
+    await loadCookies();
+
+    // ========== PHASE 1: Create new project (if requested) ==========
+    if (newProjectName) {
+        console.log(`\n=== PHASE 1: Creating new project "${newProjectName}" ===`);
+
+        // Step 1.1: Navigate to project creation page
+        console.log('Navigating to project creation page...');
+        await page.goto('https://demoapp.bloomreach.com/projects/new', {
+            waitUntil: 'networkidle',
+            timeout: 60000,
+        });
+
+        await handleLoginIfNeeded();
+
+        // Make sure we're on the project creation page after login
+        if (!page.url().includes('/projects/new')) {
+            console.log('Redirected after login, navigating back to project creation...');
+            await page.goto('https://demoapp.bloomreach.com/projects/new', {
+                waitUntil: 'networkidle',
+                timeout: 60000,
+            });
         }
 
-        // Fill email — find the input right before the password input
-        // Strategy: get all visible inputs, first one is email, second is password
-        const visibleInputs = [];
-        for (const inp of allInputs) {
-            if (await inp.isVisible()) visibleInputs.push(inp);
+        await page.waitForTimeout(3000);
+        await saveScreenshot('CREATE_PROJECT_PAGE');
+
+        // Step 1.2: Fill project name
+        console.log(`Filling project name: ${newProjectName}`);
+        const projectNameInput = page.locator('input[placeholder="Name your project"]');
+        await projectNameInput.waitFor({ timeout: 15000 });
+        await projectNameInput.fill(newProjectName);
+
+        // Step 1.3: Select "Sandbox" from Project type dropdown
+        console.log('Selecting Sandbox project type...');
+        const projectTypeDropdown = page.locator('text=Select project type').first();
+        await projectTypeDropdown.click();
+        await page.waitForTimeout(500);
+        await page.locator('text=Sandbox').click();
+        await page.waitForTimeout(500);
+
+        // Step 1.4: Click "Data structure from existing project" radio button
+        console.log('Selecting "Data structure from existing project"...');
+        await page.locator('text=Data structure from existing project').click();
+        await page.waitForTimeout(1000);
+
+        // Step 1.5: Select source project from "Existing project" dropdown
+        console.log(`Selecting existing project: ${sourceProject}`);
+        const existingProjectDropdown = page.locator('text=Select existing project').first();
+        // The dropdown might show different default text
+        const dropdownExists = await existingProjectDropdown.count();
+        if (dropdownExists > 0) {
+            await existingProjectDropdown.click();
+        } else {
+            // Try clicking the dropdown near "Existing project" label
+            await page.locator('text=Existing project').locator('..').locator('select, [class*="dropdown"], [role="listbox"], [role="combobox"]').first().click();
         }
-        console.log(`Visible inputs: ${visibleInputs.length}`);
+        await page.waitForTimeout(500);
+        await page.locator(`text="${sourceProject}"`).click();
+        await page.waitForTimeout(500);
 
-        if (visibleInputs.length < 2) {
-            const html = await loginFrame.content();
-            console.log('Frame HTML (first 3000):', html.substring(0, 3000));
-            await saveScreenshot('ERROR_NO_INPUTS');
-            throw new Error(`Expected at least 2 visible inputs, found ${visibleInputs.length}`);
-        }
+        await saveScreenshot('CREATE_PROJECT_FILLED');
 
-        // First visible input = email, last = password (or the one with type=password)
-        let emailIdx = 0;
-        let passwordIdx = -1;
-        for (let i = 0; i < visibleInputs.length; i++) {
-            const type = await visibleInputs[i].getAttribute('type');
-            if (type === 'password') { passwordIdx = i; break; }
-        }
-        if (passwordIdx === -1) passwordIdx = 1;
-        if (passwordIdx > 0) emailIdx = passwordIdx - 1;
+        // Step 1.6: Click "Next"
+        console.log('Clicking Next...');
+        await page.locator('button:has-text("Next")').click();
+        await page.waitForTimeout(3000);
+        await saveScreenshot('CREATE_PROJECT_STEP2');
 
-        await visibleInputs[emailIdx].fill(email);
-        await visibleInputs[passwordIdx].fill(password);
-        await saveScreenshot('BEFORE_LOGIN_CLICK');
+        // Step 1.7: Click "Create project" (no changes needed on this page)
+        console.log('Clicking Create project...');
+        await page.locator('button:has-text("Create project")').click();
+        await page.waitForTimeout(3000);
+        await saveScreenshot('CREATE_PROJECT_SUBMITTED');
 
-        // Click login button — try multiple strategies
-        const btnSelectors = [
-            'button:has-text("Log in")',
-            'button:has-text("Login")',
-            'button[type="submit"]',
-            'input[type="submit"]',
-            '[role="button"]:has-text("Log in")',
-            'a:has-text("Log in")',
-            'div:has-text("Log in")',
-        ];
+        // Step 1.8: Wait for project to be generated (expect 403 initially)
+        console.log('Project submitted. Waiting 15 seconds for project generation...');
+        await page.waitForTimeout(15000);
 
-        let clicked = false;
-        for (const sel of btnSelectors) {
-            const count = await loginFrame.locator(sel).count();
-            if (count > 0) {
-                console.log(`Clicking login with selector: ${sel}`);
-                await loginFrame.locator(sel).first().click();
-                clicked = true;
+        // Step 1.9: Navigate to the new project's API settings
+        console.log(`Navigating to new project API settings: /p/${newProjectName}/project-settings/api`);
+        await page.goto(`https://demoapp.bloomreach.com/p/${newProjectName}/project-settings/api`, {
+            waitUntil: 'networkidle',
+            timeout: 60000,
+        });
+
+        // If still 403/loading, retry with increasing waits
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            const bodyCheck = await page.locator('body').innerText().catch(() => '');
+            if (bodyCheck.includes('Project token') || bodyCheck.includes('API')) {
+                console.log('API page loaded successfully.');
                 break;
             }
+            console.log(`API page not ready yet (attempt ${attempt}/3), waiting 15 more seconds...`);
+            await page.waitForTimeout(15000);
+            await page.goto(`https://demoapp.bloomreach.com/p/${newProjectName}/project-settings/api`, {
+                waitUntil: 'networkidle',
+                timeout: 60000,
+            });
         }
 
-        if (!clicked) {
-            // Nuclear option: click by text content
-            console.log('Fallback: clicking by page.getByRole');
-            await loginFrame.getByRole('button', { name: /log in/i }).click();
-        }
+    } else {
+        // ========== No project creation — go directly to existing project ==========
+        console.log(`\n=== Skipping project creation, using existing project: ${projectSlug} ===`);
 
-        await page.waitForTimeout(2000);
-        await saveScreenshot('AFTER_LOGIN_CLICK');
+        await page.goto(`https://demoapp.bloomreach.com/p/${projectSlug}/project-settings/api`, {
+            waitUntil: 'networkidle',
+            timeout: 60000,
+        });
 
-        // Wait for login to complete
-        console.log('Waiting for login to complete...');
-        // Wait up to 15s for password field to disappear
-        try {
-            await page.waitForSelector('input[type="password"]', { state: 'hidden', timeout: 15000 });
-            console.log('Login successful. URL:', page.url());
-        } catch {
-            await saveScreenshot('LOGIN_FAILED');
-            const bodyAfter = await page.locator('body').innerText().catch(() => '');
-            console.log('Body after login attempt:', bodyAfter.substring(0, 500));
-            throw new Error('Login failed — password input still visible after 15s');
-        }
+        await handleLoginIfNeeded();
 
-        // Navigate to API settings if not already there
+        // Navigate to API settings if login redirected elsewhere
         if (!page.url().includes('project-settings/api')) {
-            console.log('Navigating to API settings...');
             await page.goto(`https://demoapp.bloomreach.com/p/${projectSlug}/project-settings/api`, {
                 waitUntil: 'networkidle',
                 timeout: 30000,
@@ -293,7 +336,9 @@ try {
         }
     }
 
-    // Step 3: On API page — wait for it to load
+    // ========== PHASE 2: API Key Creation ==========
+    console.log('\n=== PHASE 2: API Key Creation ===');
+
     console.log('On API page. URL:', page.url());
     await page.waitForTimeout(3000);
     await saveScreenshot('API_PAGE');
@@ -303,11 +348,9 @@ try {
 
     let projectToken = '';
 
-    // Try to get value from inputs on the page
     const allPageInputs = await page.locator('input[readonly], input[disabled], input.read-only').all();
     for (const inp of allPageInputs) {
         const val = await inp.inputValue();
-        // Project token is a UUID pattern
         if (val && val.match(/^[a-f0-9-]{36}$/)) {
             projectToken = val;
             console.log(`Found project token: ${projectToken}`);
@@ -316,7 +359,6 @@ try {
     }
 
     if (!projectToken) {
-        // Fallback: look for text content matching UUID near "Project token"
         const pageText = await page.textContent('body');
         const uuidMatch = pageText.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/);
         if (uuidMatch) {
@@ -328,27 +370,25 @@ try {
         }
     }
 
-    // Step 4: Click "+ Add key"
+    // Click "+ Add key"
     console.log('Clicking Add key...');
     await page.click('text=Add key');
     await page.waitForTimeout(1000);
     await saveScreenshot('ADD_KEY_MODAL');
 
-    // Step 5: Fill key name
-    // The modal has a "Key name" label and an input next to it
+    // Fill key name
     const modalInput = page.locator('input[type="text"]').last();
     await modalInput.fill(keyName);
 
-    // Step 6: Click Create
+    // Click Create
     await page.click('button:has-text("Create")');
     console.log('Key created, waiting for secret modal...');
     await page.waitForTimeout(2000);
     await saveScreenshot('SECRET_MODAL');
 
-    // Step 7: Extract secret API key
+    // Extract secret API key
     await page.waitForSelector('text=Secret API key', { timeout: 10000 });
 
-    // The secret is in a read-only input in the modal
     let secretApiKey = '';
     const modalInputs = await page.locator('.modal input, [role="dialog"] input, [class*="modal"] input, [class*="dialog"] input').all();
     for (const inp of modalInputs) {
@@ -360,7 +400,6 @@ try {
     }
 
     if (!secretApiKey) {
-        // Fallback: find any long alphanumeric string on the page that's new
         const inputs = await page.locator('input').all();
         for (const inp of inputs) {
             const val = await inp.inputValue();
@@ -377,16 +416,13 @@ try {
     }
     console.log(`Secret API key extracted (length: ${secretApiKey.length})`);
 
-    // Step 8: Close the modal
+    // Close the modal
     await page.click('button:has-text("Close")');
     await page.waitForTimeout(2000);
     await saveScreenshot('AFTER_CLOSE');
 
-    // Step 9: Extract API Key ID for our key
-    // Use page.evaluate to find the input value in the DOM near our key name.
-    // The GROUP KEYS table has rows with: key name text, then input with API Key ID.
+    // Extract API Key ID
     let apiKeyId = await page.evaluate((keyName) => {
-        // Find all text nodes / elements containing the key name
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         let keyNameNode = null;
         while (walker.nextNode()) {
@@ -397,13 +433,11 @@ try {
         }
         if (!keyNameNode) return '';
 
-        // Walk up to find the nearest row-like ancestor that also contains an input
         let ancestor = keyNameNode.parentElement;
         for (let i = 0; i < 8 && ancestor; i++) {
             const inputs = ancestor.querySelectorAll('input');
             for (const inp of inputs) {
                 const val = inp.value;
-                // API Key ID: alphanumeric, no dashes (not UUID), no asterisks (not secret)
                 if (val && val.length >= 10 && /^[a-z0-9]+$/i.test(val)) {
                     return val;
                 }
@@ -420,14 +454,18 @@ try {
         throw new Error('Could not extract API Key ID');
     }
 
-    // Build result
+    // ========== Build result ==========
     const result = {
         project_token: projectToken.trim(),
         secret_api_key: secretApiKey.trim(),
         api_key_id: apiKeyId.trim(),
     };
 
-    console.log('=== RESULT ===');
+    if (newProjectName) {
+        result.project_name = newProjectName;
+    }
+
+    console.log('\n=== RESULT ===');
     console.log(JSON.stringify(result, null, 2));
 
     await Actor.setValue('OUTPUT', result);
