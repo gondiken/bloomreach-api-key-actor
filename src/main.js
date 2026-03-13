@@ -495,86 +495,194 @@ try {
     // Click "+ Add key"
     console.log('Clicking Add key...');
     await page.click('text=Add key');
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(2000);
     await saveScreenshot('ADD_KEY_MODAL');
 
-    // Fill key name
-    const modalInput = page.locator('input[type="text"]').last();
-    await modalInput.fill(keyName);
-
-    // Click Create
-    await page.click('button:has-text("Create")');
-    console.log('Key created, waiting for secret modal...');
-    await page.waitForTimeout(2000);
-    await saveScreenshot('SECRET_MODAL');
-
-    // Extract secret API key
-    await page.waitForSelector('text=Secret API key', { timeout: 10000 });
-
-    let secretApiKey = '';
-    const modalInputs = await page.locator('.modal input, [role="dialog"] input, [class*="modal"] input, [class*="dialog"] input').all();
-    for (const inp of modalInputs) {
-        const val = await inp.inputValue();
-        if (val && val.length > 30 && !val.includes('-')) {
-            secretApiKey = val;
-            break;
+    // Fill key name in the modal
+    // The modal has a "Key name" label and an input — find the input inside the modal/dialog
+    const modalInputCandidates = await page.locator('[role="dialog"] input[type="text"], .modal input[type="text"], [class*="modal"] input[type="text"], [class*="dialog"] input[type="text"]').all();
+    let modalInput = null;
+    if (modalInputCandidates.length > 0) {
+        modalInput = modalInputCandidates[modalInputCandidates.length - 1];
+        console.log(`Found ${modalInputCandidates.length} modal input(s), using last one`);
+    } else {
+        // Fallback: find input near "Key name" label
+        console.log('No modal input found via dialog selectors, trying near Key name label...');
+        const keyNameLabel = page.locator('text=Key name').first();
+        if (await keyNameLabel.count() > 0) {
+            // Get the parent container and find an input within it
+            modalInput = page.locator('text=Key name').locator('..').locator('input[type="text"]').first();
+            if (await modalInput.count() === 0) {
+                modalInput = page.locator('text=Key name').locator('../..').locator('input[type="text"]').first();
+            }
+        }
+        if (!modalInput || await modalInput.count() === 0) {
+            // Last resort: any visible empty text input
+            const allTextInputs = await page.locator('input[type="text"]').all();
+            for (const inp of allTextInputs) {
+                if (await inp.isVisible() && (await inp.inputValue()) === '') {
+                    modalInput = inp;
+                    break;
+                }
+            }
         }
     }
 
-    if (!secretApiKey) {
-        const inputs = await page.locator('input').all();
-        for (const inp of inputs) {
+    if (!modalInput) {
+        await saveScreenshot('ERROR_NO_MODAL_INPUT');
+        throw new Error('Could not find key name input in the modal');
+    }
+
+    await modalInput.fill(keyName);
+    console.log(`Filled key name: ${keyName}`);
+    await page.waitForTimeout(500);
+    await saveScreenshot('KEY_NAME_FILLED');
+
+    // Click Create
+    await page.click('button:has-text("Create")');
+    console.log('Key created, waiting for response...');
+    await page.waitForTimeout(3000);
+    await saveScreenshot('AFTER_KEY_CREATE');
+
+    // Try to extract the secret API key
+    // Two possible flows:
+    //   A) "Secret API key" modal appears (Private API groups) — extract from modal
+    //   B) No modal, key appears directly in table with API Token column (Public groups)
+    let secretApiKey = '';
+    let apiKeyId = '';
+
+    const hasSecretModal = await page.locator('text=Secret API key').isVisible().catch(() => false);
+    console.log(`Secret API key modal visible: ${hasSecretModal}`);
+
+    if (hasSecretModal) {
+        // Flow A: Secret modal — extract the secret key value
+        console.log('Extracting secret from modal...');
+        const modalInputs = await page.locator('.modal input, [role="dialog"] input, [class*="modal"] input, [class*="dialog"] input').all();
+        for (const inp of modalInputs) {
             const val = await inp.inputValue();
-            if (val && val.length > 40 && /^[a-zA-Z0-9]+$/.test(val)) {
+            if (val && val.length > 30 && !val.includes('-')) {
                 secretApiKey = val;
                 break;
+            }
+        }
+
+        if (!secretApiKey) {
+            const inputs = await page.locator('input').all();
+            for (const inp of inputs) {
+                const val = await inp.inputValue();
+                if (val && val.length > 40 && /^[a-zA-Z0-9]+$/.test(val)) {
+                    secretApiKey = val;
+                    break;
+                }
+            }
+        }
+
+        if (secretApiKey) {
+            console.log(`Secret API key extracted (length: ${secretApiKey.length})`);
+        }
+
+        // Close the modal
+        await page.click('button:has-text("Close")');
+        await page.waitForTimeout(2000);
+        await saveScreenshot('AFTER_CLOSE');
+
+        // Extract API Key ID from the table row containing the key name
+        apiKeyId = await page.evaluate((keyName) => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            let keyNameNode = null;
+            while (walker.nextNode()) {
+                if (walker.currentNode.textContent.trim() === keyName) {
+                    keyNameNode = walker.currentNode.parentElement;
+                    break;
+                }
+            }
+            if (!keyNameNode) return '';
+
+            let ancestor = keyNameNode.parentElement;
+            for (let i = 0; i < 8 && ancestor; i++) {
+                const inputs = ancestor.querySelectorAll('input');
+                for (const inp of inputs) {
+                    const val = inp.value;
+                    if (val && val.length >= 10 && /^[a-z0-9]+$/i.test(val)) {
+                        return val;
+                    }
+                }
+                ancestor = ancestor.parentElement;
+            }
+            return '';
+        }, keyName);
+    } else {
+        // Flow B: No secret modal — key appears directly in the table
+        // On Public API groups, the table has "Key name | API Token" columns
+        // The API Token is the secret key AND the key identifier
+        console.log('No secret modal — extracting API Token from table...');
+        await page.waitForTimeout(2000);
+        await saveScreenshot('TABLE_AFTER_CREATE');
+
+        // Find the API token in the same row as the key name
+        const tokenFromTable = await page.evaluate((keyName) => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            let keyNameNode = null;
+            while (walker.nextNode()) {
+                if (walker.currentNode.textContent.trim() === keyName) {
+                    keyNameNode = walker.currentNode.parentElement;
+                    break;
+                }
+            }
+            if (!keyNameNode) return { secret: '', keyId: '' };
+
+            // Walk up to find the row-level container, then find input values
+            let ancestor = keyNameNode.parentElement;
+            for (let i = 0; i < 10 && ancestor; i++) {
+                const inputs = ancestor.querySelectorAll('input');
+                for (const inp of inputs) {
+                    const val = inp.value;
+                    // API Tokens are long alphanumeric strings (64 chars)
+                    if (val && val.length >= 40 && /^[a-z0-9]+$/i.test(val)) {
+                        return { secret: val, keyId: val };
+                    }
+                }
+                ancestor = ancestor.parentElement;
+            }
+
+            return { secret: '', keyId: '' };
+        }, keyName);
+
+        secretApiKey = tokenFromTable.secret;
+        apiKeyId = tokenFromTable.keyId;
+
+        if (secretApiKey) {
+            console.log(`API Token extracted from table (length: ${secretApiKey.length})`);
+        }
+
+        // If we couldn't find it in inputs, try visible text that looks like a token
+        if (!secretApiKey) {
+            console.log('Trying to find token in visible text...');
+            const allInputs = await page.locator('input').all();
+            for (const inp of allInputs) {
+                const val = await inp.inputValue();
+                if (val && val.length >= 40 && /^[a-z0-9]+$/i.test(val) && val !== projectToken) {
+                    secretApiKey = val;
+                    apiKeyId = val;
+                    console.log(`Found token in input (length: ${val.length})`);
+                    break;
+                }
             }
         }
     }
 
     if (!secretApiKey) {
         await saveScreenshot('ERROR_NO_SECRET');
-        throw new Error('Could not extract secret API key');
+        throw new Error('Could not extract secret API key / API token');
     }
-    console.log(`Secret API key extracted (length: ${secretApiKey.length})`);
-
-    // Close the modal
-    await page.click('button:has-text("Close")');
-    await page.waitForTimeout(2000);
-    await saveScreenshot('AFTER_CLOSE');
-
-    // Extract API Key ID
-    let apiKeyId = await page.evaluate((keyName) => {
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-        let keyNameNode = null;
-        while (walker.nextNode()) {
-            if (walker.currentNode.textContent.trim() === keyName) {
-                keyNameNode = walker.currentNode.parentElement;
-                break;
-            }
-        }
-        if (!keyNameNode) return '';
-
-        let ancestor = keyNameNode.parentElement;
-        for (let i = 0; i < 8 && ancestor; i++) {
-            const inputs = ancestor.querySelectorAll('input');
-            for (const inp of inputs) {
-                const val = inp.value;
-                if (val && val.length >= 10 && /^[a-z0-9]+$/i.test(val)) {
-                    return val;
-                }
-            }
-            ancestor = ancestor.parentElement;
-        }
-        return '';
-    }, keyName);
-
-    console.log(`API Key ID: ${apiKeyId || '(not found)'}`);
 
     if (!apiKeyId) {
-        await saveScreenshot('ERROR_NO_KEY_ID');
-        throw new Error('Could not extract API Key ID');
+        // Use the secret as the key ID for Public groups (they're the same)
+        apiKeyId = secretApiKey;
+        console.log('Using API Token as API Key ID (Public group)');
     }
+
+    console.log(`API Key ID: ${apiKeyId}`);
 
     // ========== Build result ==========
     const result = {
