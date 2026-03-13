@@ -260,61 +260,60 @@ try {
         // Step 1.3: Select "Sandbox" from Project type dropdown
         console.log('Selecting Sandbox project type...');
 
-        // Debug: dump HTML around "Project type" to understand the dropdown element
-        const dropdownInfo = await page.evaluate(() => {
-            const allEls = [...document.querySelectorAll('*')];
-            const ptLabel = allEls.find(el => el.textContent.trim().startsWith('Project type') && el.children.length < 3);
-            if (!ptLabel) return { found: false };
-
-            // Look at siblings and nearby elements
-            const parent = ptLabel.parentElement;
-            const siblings = parent ? [...parent.children].map(c => ({
-                tag: c.tagName.toLowerCase(),
-                class: c.className?.toString?.().substring(0, 80) || '',
-                text: c.textContent?.substring(0, 50) || '',
-            })) : [];
-
-            // Look for select elements nearby
-            const selects = parent ? [...parent.querySelectorAll('select')] : [];
-            const selectInfo = selects.map(s => ({
-                options: [...s.options].map(o => o.text),
+        // Dump all selects on the page for debugging
+        const selectDebug = await page.evaluate(() => {
+            const selects = [...document.querySelectorAll('select')];
+            return selects.map((s, i) => ({
+                index: i,
+                name: s.name,
+                id: s.id,
+                class: s.className?.substring(0, 60),
+                value: s.value,
+                optionCount: s.options.length,
+                options: [...s.options].map(o => ({ value: o.value, text: o.text.trim() })),
+                visible: s.offsetParent !== null,
             }));
-
-            return { found: true, parentTag: parent?.tagName, siblings, selectInfo, parentHTML: parent?.innerHTML?.substring(0, 500) };
         });
-        console.log('Dropdown debug info:', JSON.stringify(dropdownInfo, null, 2));
+        console.log(`Found ${selectDebug.length} <select> elements on page:`);
+        for (const s of selectDebug) {
+            console.log(`  select[${s.index}]: name=${s.name} id=${s.id} value="${s.value}" visible=${s.visible} options=${JSON.stringify(s.options.map(o => o.text))}`);
+        }
 
-        // Strategy: find the clickable dropdown element showing "Select project type"
-        // Click it to open, wait for dropdown options to appear, then click "Sandbox"
-        const dropdownTrigger = page.locator('text=Select project type').first();
-        console.log(`Dropdown trigger count: ${await dropdownTrigger.count()}`);
-        await dropdownTrigger.click({ force: true });
-        console.log('Clicked dropdown trigger');
-        await page.waitForTimeout(1000);
-        await saveScreenshot('DROPDOWN_OPENED');
-
-        // Now look for "Sandbox" text anywhere that's visible
-        const sandboxOption = page.getByText('Sandbox', { exact: true });
-        const sandboxCount = await sandboxOption.count();
-        console.log(`Sandbox option count after opening dropdown: ${sandboxCount}`);
-
-        if (sandboxCount > 0) {
-            await sandboxOption.first().click({ force: true });
-            console.log('Clicked Sandbox option');
-        } else {
-            // Maybe options are in a portal/overlay outside the dropdown
-            // Try finding any element with text Sandbox that appeared
-            const allSandbox = await page.locator('*:has-text("Sandbox")').all();
-            console.log(`Elements containing "Sandbox": ${allSandbox.length}`);
-            for (const el of allSandbox) {
-                const tag = await el.evaluate(e => e.tagName.toLowerCase());
-                const text = await el.textContent();
-                if (text.trim() === 'Sandbox') {
-                    await el.click({ force: true });
-                    console.log(`Clicked Sandbox via tag: ${tag}`);
-                    break;
+        // Find the select that has "Sandbox" as an option and select it
+        let projectTypeSelected = await page.evaluate(() => {
+            const selects = [...document.querySelectorAll('select')];
+            for (const sel of selects) {
+                const opts = [...sel.options];
+                const sandboxOpt = opts.find(o => o.text.trim() === 'Sandbox');
+                if (sandboxOpt) {
+                    sel.value = sandboxOpt.value;
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    sel.dispatchEvent(new Event('input', { bubbles: true }));
+                    return { found: true, value: sandboxOpt.value };
                 }
             }
+            return { found: false };
+        });
+        console.log(`Project type selection result: ${JSON.stringify(projectTypeSelected)}`);
+
+        if (!projectTypeSelected.found) {
+            // If no native select found, try Playwright selectOption on all selects
+            const allSelects = await page.locator('select').all();
+            for (let i = 0; i < allSelects.length; i++) {
+                try {
+                    await allSelects[i].selectOption('Sandbox');
+                    console.log(`Selected Sandbox via selectOption on select[${i}]`);
+                    projectTypeSelected = { found: true };
+                    break;
+                } catch {
+                    // Not this select
+                }
+            }
+        }
+
+        if (!projectTypeSelected.found) {
+            await saveScreenshot('ERROR_PROJECT_TYPE');
+            throw new Error('Could not find Project type dropdown with Sandbox option');
         }
 
         await page.waitForTimeout(500);
