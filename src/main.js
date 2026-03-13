@@ -492,49 +492,85 @@ try {
         }
     }
 
-    // Check if we need to create a Private API group first
-    // New projects default to "Default Public" group which doesn't show Secret API key modal
-    const isPublicGroup = await page.locator('text=Public').first().isVisible().catch(() => false);
-    const hasPrivateGroup = await page.locator('text=Private').first().isVisible().catch(() => false);
+    // Create a Private API group — new projects default to "Default Public"
+    // which doesn't show Secret API key modal. We always need a Private group.
+    // Check the group selector badge: "Default Public ▾" — if the visible badge says Public, create Private.
+    // The badge is inside the group selector, e.g. <span>Default</span> <span class="badge">Public</span>
+    const groupBadgeText = await page.evaluate(() => {
+        // Look for the API Groups section and find the group selector button/dropdown
+        const badges = document.querySelectorAll('[class*="badge"], [class*="tag"], [class*="label"], [class*="chip"]');
+        for (const badge of badges) {
+            const text = badge.textContent.trim();
+            if (text === 'Public' || text === 'Private') return text;
+        }
+        // Fallback: check if "API Token" column header exists (Public) vs "API Key ID" (Private)
+        const headers = [...document.querySelectorAll('th, [class*="header"]')];
+        const hasApiToken = headers.some(h => h.textContent.includes('API Token'));
+        const hasApiKeyId = headers.some(h => h.textContent.includes('API Key ID'));
+        if (hasApiToken && !hasApiKeyId) return 'Public';
+        if (hasApiKeyId) return 'Private';
+        return 'Unknown';
+    });
+    console.log(`Current API group type: ${groupBadgeText}`);
 
-    if (isPublicGroup && !hasPrivateGroup) {
-        console.log('Default group is Public — creating a Private API group...');
+    if (groupBadgeText !== 'Private') {
+        console.log('Creating a Private API group...');
 
-        // Step 2.1: Click the "Default Public" dropdown to open group menu
-        await page.locator('text=Default').first().click();
+        // Step 2.1: Click the group dropdown (the "Default Public ▾" button area)
+        // From screenshots: it's the element containing "Default" and "Public" near "API Groups"
+        const groupDropdown = page.locator('text=Default').first();
+        await groupDropdown.click();
         await page.waitForTimeout(1000);
+        await saveScreenshot('GROUP_DROPDOWN_OPENED');
 
         // Step 2.2: Click "+ New group"
         await page.locator('text=New group').click();
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(1500);
         await saveScreenshot('NEW_GROUP_MODAL');
 
         // Step 2.3: Click "Private access" in the modal
         await page.locator('text=Private access').click();
         await page.waitForTimeout(500);
+        await saveScreenshot('PRIVATE_ACCESS_SELECTED');
 
         // Step 2.4: Fill group name
+        // The modal has a "Group name" label with an input below it
+        let groupNameFilled = false;
         const groupNameInput = page.locator('text=Group name').locator('..').locator('input').first();
         if (await groupNameInput.count() > 0) {
             await groupNameInput.fill(keyName);
-        } else {
-            // Fallback: find any visible empty input in the modal
-            const emptyInputs = await page.locator('input[type="text"]').all();
+            groupNameFilled = true;
+        }
+        if (!groupNameFilled) {
+            // Fallback: find any visible empty input
+            const emptyInputs = await page.locator('input').all();
             for (const inp of emptyInputs) {
                 if (await inp.isVisible() && (await inp.inputValue()) === '') {
                     await inp.fill(keyName);
+                    groupNameFilled = true;
                     break;
                 }
             }
         }
-        console.log(`Filled group name: ${keyName}`);
-        await saveScreenshot('GROUP_FILLED');
+        console.log(`Filled group name: ${keyName} (success: ${groupNameFilled})`);
+        await saveScreenshot('GROUP_NAME_FILLED');
 
         // Step 2.5: Click "Create group"
         await page.locator('button:has-text("Create group")').click();
-        console.log('Private API group created');
+        console.log('Private API group created, waiting for page update...');
         await page.waitForTimeout(3000);
         await saveScreenshot('GROUP_CREATED');
+
+        // Verify we're now on the Private group
+        const newBadgeText = await page.evaluate(() => {
+            const badges = document.querySelectorAll('[class*="badge"], [class*="tag"], [class*="label"], [class*="chip"]');
+            for (const badge of badges) {
+                const text = badge.textContent.trim();
+                if (text === 'Public' || text === 'Private') return text;
+            }
+            return 'Unknown';
+        });
+        console.log(`After group creation, badge text: ${newBadgeText}`);
     } else {
         console.log('Private API group already exists, proceeding...');
     }
