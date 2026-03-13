@@ -258,62 +258,94 @@ try {
         await projectNameInput.fill(newProjectName);
 
         // Step 1.3: Select "Sandbox" from Project type dropdown
+        // All dropdowns are custom Angular components (0 native <select> elements)
         console.log('Selecting Sandbox project type...');
 
-        // Dump all selects on the page for debugging
-        const selectDebug = await page.evaluate(() => {
-            const selects = [...document.querySelectorAll('select')];
-            return selects.map((s, i) => ({
-                index: i,
-                name: s.name,
-                id: s.id,
-                class: s.className?.substring(0, 60),
-                value: s.value,
-                optionCount: s.options.length,
-                options: [...s.options].map(o => ({ value: o.value, text: o.text.trim() })),
-                visible: s.offsetParent !== null,
-            }));
-        });
-        console.log(`Found ${selectDebug.length} <select> elements on page:`);
-        for (const s of selectDebug) {
-            console.log(`  select[${s.index}]: name=${s.name} id=${s.id} value="${s.value}" visible=${s.visible} options=${JSON.stringify(s.options.map(o => o.text))}`);
-        }
-
-        // Find the select that has "Sandbox" as an option and select it
-        let projectTypeSelected = await page.evaluate(() => {
-            const selects = [...document.querySelectorAll('select')];
-            for (const sel of selects) {
-                const opts = [...sel.options];
-                const sandboxOpt = opts.find(o => o.text.trim() === 'Sandbox');
-                if (sandboxOpt) {
-                    sel.value = sandboxOpt.value;
-                    sel.dispatchEvent(new Event('change', { bubbles: true }));
-                    sel.dispatchEvent(new Event('input', { bubbles: true }));
-                    return { found: true, value: sandboxOpt.value };
+        // Dump HTML around "Project type" to understand the component
+        const ptHTML = await page.evaluate(() => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+                if (walker.currentNode.textContent.trim() === 'Project type') {
+                    const label = walker.currentNode.parentElement;
+                    const container = label.parentElement;
+                    return {
+                        labelTag: label.tagName,
+                        containerTag: container.tagName,
+                        containerClass: container.className?.toString?.().substring(0, 100),
+                        containerHTML: container.innerHTML.substring(0, 800),
+                        // Also find the clickable dropdown element
+                        nextSiblings: [...container.children].map(c => ({
+                            tag: c.tagName.toLowerCase(),
+                            class: c.className?.toString?.().substring(0, 80),
+                            text: c.textContent?.substring(0, 50),
+                        })),
+                    };
                 }
             }
             return { found: false };
         });
-        console.log(`Project type selection result: ${JSON.stringify(projectTypeSelected)}`);
+        console.log('Project type HTML:', JSON.stringify(ptHTML, null, 2));
 
-        if (!projectTypeSelected.found) {
-            // If no native select found, try Playwright selectOption on all selects
-            const allSelects = await page.locator('select').all();
-            for (let i = 0; i < allSelects.length; i++) {
-                try {
-                    await allSelects[i].selectOption('Sandbox');
-                    console.log(`Selected Sandbox via selectOption on select[${i}]`);
-                    projectTypeSelected = { found: true };
-                    break;
-                } catch {
-                    // Not this select
-                }
-            }
+        // Click the dropdown element showing "Select project type"
+        // Use the visible dropdown trigger element directly
+        const ptDropdown = page.locator('text=Select project type').first();
+        const ptBox = await ptDropdown.boundingBox();
+        console.log(`Project type dropdown bounding box: ${JSON.stringify(ptBox)}`);
+
+        if (ptBox) {
+            // Click in the center of the dropdown element
+            await page.mouse.click(ptBox.x + ptBox.width / 2, ptBox.y + ptBox.height / 2);
+            console.log('Clicked project type dropdown via mouse.click');
+        } else {
+            await ptDropdown.click({ force: true });
+            console.log('Clicked project type dropdown via force click');
         }
 
-        if (!projectTypeSelected.found) {
-            await saveScreenshot('ERROR_PROJECT_TYPE');
-            throw new Error('Could not find Project type dropdown with Sandbox option');
+        await page.waitForTimeout(1500);
+        await saveScreenshot('DROPDOWN_OPENED');
+
+        // Look for "Sandbox" option that should now be visible
+        const sandboxVisible = await page.getByText('Sandbox', { exact: true }).isVisible().catch(() => false);
+        console.log(`Sandbox option visible after click: ${sandboxVisible}`);
+
+        if (sandboxVisible) {
+            await page.getByText('Sandbox', { exact: true }).click();
+            console.log('Clicked Sandbox option');
+        } else {
+            // The dropdown might render options in a CDK overlay or portal
+            // Search for any element with "Sandbox" that appeared
+            const overlayHTML = await page.evaluate(() => {
+                // Check CDK overlay container (Angular Material pattern)
+                const overlay = document.querySelector('.cdk-overlay-container, [class*="overlay"], [class*="dropdown-panel"], [class*="options"]');
+                if (overlay) return overlay.innerHTML.substring(0, 500);
+                // Check body children for any new dropdown/popover
+                const bodyChildren = [...document.body.children];
+                for (const child of bodyChildren) {
+                    if (child.textContent?.includes('Sandbox') && child.textContent?.includes('Production')) {
+                        return child.innerHTML.substring(0, 500);
+                    }
+                }
+                return 'no overlay found';
+            });
+            console.log('Overlay HTML:', overlayHTML);
+
+            // Try clicking via evaluate on any element containing exactly "Sandbox"
+            const clicked = await page.evaluate(() => {
+                const els = [...document.querySelectorAll('*')];
+                for (const el of els) {
+                    if (el.children.length === 0 && el.textContent?.trim() === 'Sandbox' && el.offsetParent !== null) {
+                        el.click();
+                        return true;
+                    }
+                }
+                return false;
+            });
+            console.log(`Clicked Sandbox via evaluate: ${clicked}`);
+
+            if (!clicked) {
+                await saveScreenshot('ERROR_PROJECT_TYPE');
+                throw new Error('Could not find and click Sandbox option');
+            }
         }
 
         await page.waitForTimeout(500);
