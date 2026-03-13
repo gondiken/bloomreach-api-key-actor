@@ -261,44 +261,56 @@ try {
         // All dropdowns are custom Angular components (0 native <select> elements)
         console.log('Selecting Sandbox project type...');
 
-        // Dump HTML around "Project type" to understand the component
-        const ptHTML = await page.evaluate(() => {
+        // Dump wide HTML: walk up from "Select project type" text to find the full component
+        const dropdownDebug = await page.evaluate(() => {
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
             while (walker.nextNode()) {
-                if (walker.currentNode.textContent.trim() === 'Project type') {
-                    const label = walker.currentNode.parentElement;
-                    const container = label.parentElement;
-                    return {
-                        labelTag: label.tagName,
-                        containerTag: container.tagName,
-                        containerClass: container.className?.toString?.().substring(0, 100),
-                        containerHTML: container.innerHTML.substring(0, 800),
-                        // Also find the clickable dropdown element
-                        nextSiblings: [...container.children].map(c => ({
-                            tag: c.tagName.toLowerCase(),
-                            class: c.className?.toString?.().substring(0, 80),
-                            text: c.textContent?.substring(0, 50),
-                        })),
-                    };
+                if (walker.currentNode.textContent.trim() === 'Select project type') {
+                    let el = walker.currentNode.parentElement;
+                    const ancestors = [];
+                    for (let i = 0; i < 8 && el; i++) {
+                        ancestors.push({
+                            level: i,
+                            tag: el.tagName.toLowerCase(),
+                            class: el.className?.toString?.().substring(0, 100) || '',
+                            id: el.id || '',
+                            childCount: el.children.length,
+                            boundingRect: el.getBoundingClientRect ? {
+                                x: Math.round(el.getBoundingClientRect().x),
+                                y: Math.round(el.getBoundingClientRect().y),
+                                w: Math.round(el.getBoundingClientRect().width),
+                                h: Math.round(el.getBoundingClientRect().height),
+                            } : null,
+                        });
+                        el = el.parentElement;
+                    }
+                    return ancestors;
                 }
             }
-            return { found: false };
+            return [];
         });
-        console.log('Project type HTML:', JSON.stringify(ptHTML, null, 2));
+        console.log('Dropdown ancestors (from text "Select project type"):');
+        for (const a of dropdownDebug) {
+            console.log(`  [${a.level}] <${a.tag}> class="${a.class}" id="${a.id}" children=${a.childCount} rect=${JSON.stringify(a.boundingRect)}`);
+        }
 
-        // Click the dropdown element showing "Select project type"
-        // Use the visible dropdown trigger element directly
-        const ptDropdown = page.locator('text=Select project type').first();
-        const ptBox = await ptDropdown.boundingBox();
-        console.log(`Project type dropdown bounding box: ${JSON.stringify(ptBox)}`);
+        // The dropdown visual element (with border + chevron) is likely one of the ancestors
+        // with a reasonable bounding box (width ~200-300px, height ~35-45px)
+        // Click the ancestor that looks like the full dropdown trigger
+        let dropdownClicked = false;
+        for (const a of dropdownDebug) {
+            if (a.boundingRect && a.boundingRect.w > 150 && a.boundingRect.h > 25 && a.boundingRect.h < 60) {
+                console.log(`Clicking dropdown ancestor: <${a.tag}> class="${a.class}" at (${a.boundingRect.x + a.boundingRect.w/2}, ${a.boundingRect.y + a.boundingRect.h/2})`);
+                await page.mouse.click(a.boundingRect.x + a.boundingRect.w / 2, a.boundingRect.y + a.boundingRect.h / 2);
+                dropdownClicked = true;
+                break;
+            }
+        }
 
-        if (ptBox) {
-            // Click in the center of the dropdown element
-            await page.mouse.click(ptBox.x + ptBox.width / 2, ptBox.y + ptBox.height / 2);
-            console.log('Clicked project type dropdown via mouse.click');
-        } else {
-            await ptDropdown.click({ force: true });
-            console.log('Clicked project type dropdown via force click');
+        if (!dropdownClicked) {
+            // Fallback: click the text directly
+            console.log('Fallback: clicking "Select project type" text');
+            await page.locator('text=Select project type').first().click({ force: true });
         }
 
         await page.waitForTimeout(1500);
@@ -312,24 +324,25 @@ try {
             await page.getByText('Sandbox', { exact: true }).click();
             console.log('Clicked Sandbox option');
         } else {
-            // The dropdown might render options in a CDK overlay or portal
-            // Search for any element with "Sandbox" that appeared
-            const overlayHTML = await page.evaluate(() => {
-                // Check CDK overlay container (Angular Material pattern)
-                const overlay = document.querySelector('.cdk-overlay-container, [class*="overlay"], [class*="dropdown-panel"], [class*="options"]');
-                if (overlay) return overlay.innerHTML.substring(0, 500);
-                // Check body children for any new dropdown/popover
-                const bodyChildren = [...document.body.children];
-                for (const child of bodyChildren) {
-                    if (child.textContent?.includes('Sandbox') && child.textContent?.includes('Production')) {
-                        return child.innerHTML.substring(0, 500);
-                    }
-                }
-                return 'no overlay found';
+            // Dump ALL elements on page that contain "Sandbox"
+            const sandboxElements = await page.evaluate(() => {
+                return [...document.querySelectorAll('*')]
+                    .filter(el => el.textContent?.trim() === 'Sandbox' || el.innerText?.trim() === 'Sandbox')
+                    .map(el => ({
+                        tag: el.tagName.toLowerCase(),
+                        class: el.className?.toString?.().substring(0, 80),
+                        visible: el.offsetParent !== null,
+                        rect: el.getBoundingClientRect ? {
+                            x: Math.round(el.getBoundingClientRect().x),
+                            y: Math.round(el.getBoundingClientRect().y),
+                            w: Math.round(el.getBoundingClientRect().width),
+                            h: Math.round(el.getBoundingClientRect().height),
+                        } : null,
+                    }));
             });
-            console.log('Overlay HTML:', overlayHTML);
+            console.log(`Elements with "Sandbox" text: ${JSON.stringify(sandboxElements)}`);
 
-            // Try clicking via evaluate on any element containing exactly "Sandbox"
+            // Try clicking via evaluate
             const clicked = await page.evaluate(() => {
                 const els = [...document.querySelectorAll('*')];
                 for (const el of els) {
