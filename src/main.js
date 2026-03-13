@@ -249,12 +249,15 @@ try {
         await projectNameInput.fill(newProjectName);
 
         // Step 1.3: Select "Sandbox" from Project type dropdown
+        // This is a custom dropdown — click the trigger element showing "Select project type"
         console.log('Selecting Sandbox project type...');
-        const projectTypeDropdown = page.locator('text=Select project type').first();
-        await projectTypeDropdown.click();
+        await page.locator('text=Select project type').first().click();
         await page.waitForTimeout(500);
-        await page.locator('text=Sandbox').click();
+        // The dropdown options appear as a list — click "Sandbox" precisely
+        // Use exact match to avoid partial matches with other text on the page
+        await page.getByText('Sandbox', { exact: true }).click();
         await page.waitForTimeout(500);
+        await saveScreenshot('PROJECT_TYPE_SELECTED');
 
         // Step 1.4: Click "Data structure from existing project" radio button
         console.log('Selecting "Data structure from existing project"...');
@@ -262,20 +265,31 @@ try {
         await page.waitForTimeout(1000);
 
         // Step 1.5: Select source project from "Existing project" dropdown
+        // This is a custom dropdown with a search field — click to open, type to search, click result
         console.log(`Selecting existing project: ${sourceProject}`);
-        const existingProjectDropdown = page.locator('text=Select existing project').first();
-        // The dropdown might show different default text
-        const dropdownExists = await existingProjectDropdown.count();
-        if (dropdownExists > 0) {
-            await existingProjectDropdown.click();
+
+        // Click the dropdown trigger (shows "Select existing project" or similar)
+        // Look for the dropdown near the "Existing project" label
+        const existingDropdownTrigger = page.locator('text=Select existing project').first();
+        const triggerExists = await existingDropdownTrigger.count();
+        if (triggerExists > 0) {
+            await existingDropdownTrigger.click();
         } else {
-            // Try clicking the dropdown near "Existing project" label
-            await page.locator('text=Existing project').locator('..').locator('select, [class*="dropdown"], [role="listbox"], [role="combobox"]').first().click();
+            // Fallback: find clickable element near "Existing project" label
+            await page.locator('text=Existing project').locator('..').locator('[class*="dropdown"], [class*="select"]').first().click();
         }
         await page.waitForTimeout(500);
-        await page.locator(`text="${sourceProject}"`).click();
-        await page.waitForTimeout(500);
 
+        // Type in the search field to filter
+        const searchInput = page.locator('input[placeholder="Search..."]');
+        if (await searchInput.count() > 0) {
+            await searchInput.fill(sourceProject);
+            await page.waitForTimeout(500);
+        }
+
+        // Click the matching option
+        await page.getByText(sourceProject, { exact: true }).click();
+        await page.waitForTimeout(500);
         await saveScreenshot('CREATE_PROJECT_FILLED');
 
         // Step 1.6: Click "Next"
@@ -284,9 +298,11 @@ try {
         await page.waitForTimeout(3000);
         await saveScreenshot('CREATE_PROJECT_STEP2');
 
-        // Step 1.7: Click "Create project" (no changes needed on this page)
+        // Step 1.7: Click "Create project" at bottom right (no changes needed on this page)
         console.log('Clicking Create project...');
-        await page.locator('button:has-text("Create project")').click();
+        const createBtn = page.locator('button:has-text("Create project")');
+        await createBtn.scrollIntoViewIfNeeded();
+        await createBtn.click();
         await page.waitForTimeout(3000);
         await saveScreenshot('CREATE_PROJECT_SUBMITTED');
 
