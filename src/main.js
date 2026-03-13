@@ -249,13 +249,34 @@ try {
         await projectNameInput.fill(newProjectName);
 
         // Step 1.3: Select "Sandbox" from Project type dropdown
-        // This is a custom dropdown — click the trigger element showing "Select project type"
         console.log('Selecting Sandbox project type...');
-        await page.locator('text=Select project type').first().click();
-        await page.waitForTimeout(500);
-        // The dropdown options appear as a list — click "Sandbox" precisely
-        // Use exact match to avoid partial matches with other text on the page
-        await page.getByText('Sandbox', { exact: true }).click();
+        // Try native <select> first, fall back to custom dropdown click
+        const selectEl = page.locator('select').filter({ hasText: /project type/i }).first();
+        const nativeSelectCount = await selectEl.count();
+        if (nativeSelectCount > 0) {
+            await selectEl.selectOption({ label: 'Sandbox' });
+            console.log('Selected Sandbox via native <select>');
+        } else {
+            // Find select near "Project type" label using DOM proximity
+            const allSelects = await page.locator('select').all();
+            let selected = false;
+            for (const sel of allSelects) {
+                const options = await sel.locator('option').allTextContents();
+                if (options.some(o => o.includes('Sandbox'))) {
+                    await sel.selectOption({ label: 'Sandbox' });
+                    console.log('Selected Sandbox via native <select> (by option scan)');
+                    selected = true;
+                    break;
+                }
+            }
+            if (!selected) {
+                // Custom dropdown fallback: click trigger, then click option
+                await page.locator('text=Select project type').first().click();
+                await page.waitForTimeout(500);
+                await page.getByText('Sandbox', { exact: true }).click();
+                console.log('Selected Sandbox via custom dropdown click');
+            }
+        }
         await page.waitForTimeout(500);
         await saveScreenshot('PROJECT_TYPE_SELECTED');
 
@@ -265,30 +286,55 @@ try {
         await page.waitForTimeout(1000);
 
         // Step 1.5: Select source project from "Existing project" dropdown
-        // This is a custom dropdown with a search field — click to open, type to search, click result
+        // This is a custom dropdown with a search field
         console.log(`Selecting existing project: ${sourceProject}`);
+        await saveScreenshot('BEFORE_EXISTING_PROJECT');
 
-        // Click the dropdown trigger (shows "Select existing project" or similar)
-        // Look for the dropdown near the "Existing project" label
-        const existingDropdownTrigger = page.locator('text=Select existing project').first();
-        const triggerExists = await existingDropdownTrigger.count();
-        if (triggerExists > 0) {
-            await existingDropdownTrigger.click();
-        } else {
-            // Fallback: find clickable element near "Existing project" label
-            await page.locator('text=Existing project').locator('..').locator('[class*="dropdown"], [class*="select"]').first().click();
+        // Try native <select> first
+        let existingSelected = false;
+        const allSelects2 = await page.locator('select').all();
+        for (const sel of allSelects2) {
+            const options = await sel.locator('option').allTextContents();
+            if (options.some(o => o.includes(sourceProject))) {
+                await sel.selectOption({ label: sourceProject });
+                console.log(`Selected ${sourceProject} via native <select>`);
+                existingSelected = true;
+                break;
+            }
         }
-        await page.waitForTimeout(500);
 
-        // Type in the search field to filter
-        const searchInput = page.locator('input[placeholder="Search..."]');
-        if (await searchInput.count() > 0) {
-            await searchInput.fill(sourceProject);
+        if (!existingSelected) {
+            // Custom dropdown: click to open, search, click result
+            // Try clicking "Select existing project" text or the dropdown near "Existing project" label
+            const trigger = page.locator('text=Select existing project').first();
+            if (await trigger.count() > 0) {
+                await trigger.click();
+            } else {
+                // Click the dropdown element after the "Existing project" label
+                await page.evaluate(() => {
+                    const labels = [...document.querySelectorAll('*')];
+                    const label = labels.find(el => el.textContent.trim() === 'Existing project');
+                    if (label) {
+                        const next = label.nextElementSibling || label.parentElement.querySelector('[class*="select"], [class*="dropdown"]');
+                        if (next) next.click();
+                    }
+                });
+            }
             await page.waitForTimeout(500);
+
+            // Type in the search field to filter
+            const searchInput = page.locator('input[placeholder="Search..."]');
+            if (await searchInput.count() > 0) {
+                console.log('Typing in search field...');
+                await searchInput.fill(sourceProject);
+                await page.waitForTimeout(1000);
+            }
+
+            // Click the matching option in the dropdown list
+            await page.getByText(sourceProject, { exact: true }).click();
+            console.log(`Selected ${sourceProject} via custom dropdown`);
         }
 
-        // Click the matching option
-        await page.getByText(sourceProject, { exact: true }).click();
         await page.waitForTimeout(500);
         await saveScreenshot('CREATE_PROJECT_FILLED');
 
