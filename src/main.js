@@ -575,6 +575,29 @@ try {
         console.log('Private API group already exists, proceeding...');
     }
 
+    // Dismiss any lingering modal backdrop (e.g. from "Create group" modal)
+    const backdrop = page.locator('.ui-modal-backdrop, .cdk-overlay-backdrop');
+    if (await backdrop.count() > 0) {
+        console.log('Modal backdrop detected, dismissing...');
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(1000);
+        // If still there, click on the backdrop to dismiss
+        if (await backdrop.count() > 0) {
+            await backdrop.first().click({ force: true }).catch(() => {});
+            await page.waitForTimeout(1000);
+        }
+        // If STILL there, remove it via JS
+        if (await backdrop.count() > 0) {
+            await page.evaluate(() => {
+                document.querySelectorAll('.ui-modal-backdrop, .cdk-overlay-backdrop, .cdk-overlay-container').forEach(el => {
+                    el.remove();
+                });
+            });
+            await page.waitForTimeout(500);
+            console.log('Removed backdrop via JS');
+        }
+    }
+
     // Click "+ Add key" (now inside the Private group)
     console.log('Clicking Add key...');
     await page.click('text=Add key');
