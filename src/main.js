@@ -528,8 +528,8 @@ try {
         await page.waitForTimeout(1500);
         await saveScreenshot('NEW_GROUP_MODAL');
 
-        // Step 2.3: Click "Private access" in the modal
-        await page.locator('text=Private access').click();
+        // Step 2.3: Click "Private access" in the modal (exact match to avoid hitting description text)
+        await page.getByText('Private access', { exact: true }).click();
         await page.waitForTimeout(500);
         await saveScreenshot('PRIVATE_ACCESS_SELECTED');
 
