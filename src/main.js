@@ -684,114 +684,110 @@ try {
     }
 
     // Scroll down to GROUP PERMISSIONS section
-    const permissionsSection = page.locator('text=GROUP PERMISSIONS').first();
-    await permissionsSection.scrollIntoViewIfNeeded();
+    const permissionsHeading = page.locator('text=GROUP PERMISSIONS').first();
+    await permissionsHeading.scrollIntoViewIfNeeded();
     await page.waitForTimeout(1000);
 
-    // Helper: click a permission tab within GROUP PERMISSIONS by using page.evaluate
-    // to find the tab text near the "GROUP PERMISSIONS" heading (avoids matching sidebar items)
-    const clickPermissionTab = async (tabName) => {
-        const clicked = await page.evaluate((name) => {
-            // Find the "GROUP PERMISSIONS" text, then look for tab-like elements after it
-            const allElements = [...document.querySelectorAll('*')];
-            let permSectionFound = false;
-            for (const el of allElements) {
-                if (!permSectionFound) {
-                    if (el.textContent?.trim() === 'GROUP PERMISSIONS' && el.children.length === 0) {
-                        permSectionFound = true;
-                    }
-                    continue;
-                }
-                // After GROUP PERMISSIONS, look for the tab text
-                const directText = el.textContent?.trim();
-                if (directText === name && el.children.length === 0) {
-                    el.click();
-                    return true;
+    // Debug: dump DOM info about the permissions area
+    const domInfo = await page.evaluate(() => {
+        const info = {};
+        // Count all checkboxes on page
+        const allCbs = document.querySelectorAll('input[type="checkbox"]');
+        info.totalCheckboxes = allCbs.length;
+        info.uncheckedCheckboxes = [...allCbs].filter(cb => !cb.checked).length;
+        // Find GROUP PERMISSIONS text - check various approaches
+        const allElements = [...document.querySelectorAll('*')];
+        const gpMatches = allElements.filter(el => el.textContent?.includes('GROUP PERMISSIONS'));
+        info.gpMatchCount = gpMatches.length;
+        if (gpMatches.length > 0) {
+            const first = gpMatches[0];
+            info.gpTag = first.tagName;
+            info.gpChildCount = first.children.length;
+            info.gpDirectText = first.innerText?.substring(0, 100);
+        }
+        // Find tab-like elements near permissions
+        const tabTexts = ['Customer properties', 'Events', 'Catalogs'];
+        info.tabElements = {};
+        for (const t of tabTexts) {
+            const matches = allElements.filter(el =>
+                el.children.length === 0 && el.textContent?.trim() === t
+            );
+            info.tabElements[t] = matches.length;
+        }
+        return info;
+    });
+    console.log('DOM info:', JSON.stringify(domInfo));
+
+    // Helper: click all visible unchecked checkboxes on the page
+    // The only checkboxes visible should be in the GROUP PERMISSIONS tab content
+    const clickAllUncheckedCheckboxes = async () => {
+        const count = await page.evaluate(() => {
+            const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+            let clicked = 0;
+            for (const cb of checkboxes) {
+                if (!cb.checked && cb.offsetParent !== null) {
+                    cb.click();
+                    clicked++;
                 }
             }
-            return false;
-        }, tabName);
-        console.log(`  Tab "${tabName}" click: ${clicked}`);
-        return clicked;
+            return clicked;
+        });
+        console.log(`  Checked ${count} checkboxes`);
+        return count;
     };
 
-    // Helper: check all unchecked checkboxes for a heading row (e.g. "New properties", "Other")
-    // Scoped to GROUP PERMISSIONS section — skips matches before it
-    const checkPermissionRow = async (rowLabel) => {
-        const result = await page.evaluate((label) => {
-            // First, find the GROUP PERMISSIONS section element
-            const allElements = [...document.querySelectorAll('*')];
-            let permSectionEl = null;
-            for (const el of allElements) {
-                if (el.textContent?.trim() === 'GROUP PERMISSIONS' && el.children.length === 0) {
-                    permSectionEl = el;
-                    break;
+    // Helper: click a permission tab by finding it near "Customer properties" sibling
+    const clickPermTab = async (tabName) => {
+        // Use Playwright to find elements with exact text, then click the one
+        // that's in the tab bar (near Customer properties, Events, etc.)
+        const clicked = await page.evaluate((name) => {
+            // Strategy: find all leaf elements with the exact tab text
+            const candidates = [...document.querySelectorAll('*')].filter(el => {
+                const text = el.textContent?.trim();
+                return text === name && el.children.length === 0;
+            });
+            // Click the first visible one
+            for (const el of candidates) {
+                if (el.offsetParent !== null) {
+                    el.click();
+                    return `clicked (tag: ${el.tagName}, class: ${el.className?.substring?.(0, 50)})`;
                 }
             }
-            if (!permSectionEl) return 'no GROUP PERMISSIONS section found';
-
-            // Get the permissions container (ancestor that contains all the tabs and rows)
-            let permContainer = permSectionEl.parentElement;
-            for (let i = 0; i < 5 && permContainer; i++) {
-                if (permContainer.querySelectorAll('input[type="checkbox"]').length > 0) break;
-                permContainer = permContainer.parentElement;
+            // Fallback: find leaf elements containing the text
+            const fallback = [...document.querySelectorAll('*')].filter(el => {
+                return el.innerText?.trim() === name && el.offsetParent !== null;
+            });
+            if (fallback.length > 0) {
+                fallback[fallback.length - 1].click(); // last match more likely to be the tab
+                return `clicked fallback (tag: ${fallback[fallback.length - 1].tagName})`;
             }
-            if (!permContainer) return 'no permissions container found';
-
-            // Now find the label text within the permissions container
-            const walker = document.createTreeWalker(permContainer, NodeFilter.SHOW_TEXT);
-            while (walker.nextNode()) {
-                const node = walker.currentNode;
-                if (node.textContent.trim() === label) {
-                    // Walk up to find the row with checkboxes
-                    let container = node.parentElement;
-                    for (let i = 0; i < 10 && container && container !== permContainer; i++) {
-                        const checkboxes = container.querySelectorAll('input[type="checkbox"]');
-                        if (checkboxes.length >= 1) {
-                            let checked = 0;
-                            checkboxes.forEach(cb => {
-                                if (!cb.checked) { cb.click(); checked++; }
-                            });
-                            return `checked ${checked} boxes for "${label}"`;
-                        }
-                        container = container.parentElement;
-                    }
-                    // Don't break — try next match of this label in case the first was wrong
-                }
-            }
-            return `label "${label}" not found or no checkboxes near it`;
-        }, rowLabel);
-        console.log(`  ${result}`);
+            return 'not found';
+        }, tabName);
+        console.log(`  Tab "${tabName}": ${clicked}`);
     };
 
     // Step 3.1: Customer properties tab (active by default)
     console.log('Setting Customer properties permissions...');
-    await checkPermissionRow('New properties');
-    await page.waitForTimeout(500);
-    await checkPermissionRow('Other');
-    await page.waitForTimeout(500);
+    await clickAllUncheckedCheckboxes();
+    await page.waitForTimeout(1000);
     await saveScreenshot('PERMISSIONS_CUSTOMER_PROPERTIES');
 
     // Step 3.2: Events tab
     console.log('Switching to Events tab...');
-    await clickPermissionTab('Events');
+    await clickPermTab('Events');
     await page.waitForTimeout(1500);
-
     console.log('Setting Events permissions...');
-    await checkPermissionRow('New events');
-    await page.waitForTimeout(500);
-    await checkPermissionRow('Other');
-    await page.waitForTimeout(500);
+    await clickAllUncheckedCheckboxes();
+    await page.waitForTimeout(1000);
     await saveScreenshot('PERMISSIONS_EVENTS');
 
     // Step 3.3: Catalogs tab
     console.log('Switching to Catalogs tab...');
-    await clickPermissionTab('Catalogs');
+    await clickPermTab('Catalogs');
     await page.waitForTimeout(1500);
-
     console.log('Setting Catalogs permissions...');
-    await checkPermissionRow('Action');
-    await page.waitForTimeout(500);
+    await clickAllUncheckedCheckboxes();
+    await page.waitForTimeout(1000);
     await saveScreenshot('PERMISSIONS_CATALOGS');
 
     // Step 3.4: Save Changes
