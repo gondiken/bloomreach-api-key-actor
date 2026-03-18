@@ -688,87 +688,114 @@ try {
     await permissionsSection.scrollIntoViewIfNeeded();
     await page.waitForTimeout(1000);
 
-    // Step 3.1: Customer properties tab — check Get and Set for "New properties" and "Other"
-    console.log('Setting Customer properties permissions...');
-    // "Customer properties" tab should already be active by default
-    // Click the header-level Get and Set checkboxes for "New properties" row
-    const checkPermissionRow = async (rowLabel) => {
-        // Find the row containing the label, then click its unchecked checkboxes
-        const row = page.locator(`text=${rowLabel}`).first().locator('..');
-        // Look for checkboxes (input[type="checkbox"]) in the row's ancestor that contains Get/Set
-        await page.evaluate((label) => {
-            // Find the heading element (h2/h3/div) with the label text
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-            while (walker.nextNode()) {
-                const node = walker.currentNode;
-                if (node.textContent.trim() === label) {
-                    // Walk up to find the row container
-                    let container = node.parentElement;
-                    for (let i = 0; i < 5 && container; i++) {
-                        const checkboxes = container.querySelectorAll('input[type="checkbox"]');
-                        if (checkboxes.length >= 2) {
-                            // Check all unchecked checkboxes in this row
-                            checkboxes.forEach(cb => {
-                                if (!cb.checked) cb.click();
-                            });
-                            return;
-                        }
-                        container = container.parentElement;
+    // Helper: click a permission tab within GROUP PERMISSIONS by using page.evaluate
+    // to find the tab text near the "GROUP PERMISSIONS" heading (avoids matching sidebar items)
+    const clickPermissionTab = async (tabName) => {
+        const clicked = await page.evaluate((name) => {
+            // Find the "GROUP PERMISSIONS" text, then look for tab-like elements after it
+            const allElements = [...document.querySelectorAll('*')];
+            let permSectionFound = false;
+            for (const el of allElements) {
+                if (!permSectionFound) {
+                    if (el.textContent?.trim() === 'GROUP PERMISSIONS' && el.children.length === 0) {
+                        permSectionFound = true;
                     }
+                    continue;
+                }
+                // After GROUP PERMISSIONS, look for the tab text
+                const directText = el.textContent?.trim();
+                if (directText === name && el.children.length === 0) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+        }, tabName);
+        console.log(`  Tab "${tabName}" click: ${clicked}`);
+        return clicked;
+    };
+
+    // Helper: check all unchecked checkboxes for a heading row (e.g. "New properties", "Other")
+    // Scoped to GROUP PERMISSIONS section — skips matches before it
+    const checkPermissionRow = async (rowLabel) => {
+        const result = await page.evaluate((label) => {
+            // First, find the GROUP PERMISSIONS section element
+            const allElements = [...document.querySelectorAll('*')];
+            let permSectionEl = null;
+            for (const el of allElements) {
+                if (el.textContent?.trim() === 'GROUP PERMISSIONS' && el.children.length === 0) {
+                    permSectionEl = el;
                     break;
                 }
             }
+            if (!permSectionEl) return 'no GROUP PERMISSIONS section found';
+
+            // Get the permissions container (ancestor that contains all the tabs and rows)
+            let permContainer = permSectionEl.parentElement;
+            for (let i = 0; i < 5 && permContainer; i++) {
+                if (permContainer.querySelectorAll('input[type="checkbox"]').length > 0) break;
+                permContainer = permContainer.parentElement;
+            }
+            if (!permContainer) return 'no permissions container found';
+
+            // Now find the label text within the permissions container
+            const walker = document.createTreeWalker(permContainer, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (node.textContent.trim() === label) {
+                    // Walk up to find the row with checkboxes
+                    let container = node.parentElement;
+                    for (let i = 0; i < 10 && container && container !== permContainer; i++) {
+                        const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+                        if (checkboxes.length >= 1) {
+                            let checked = 0;
+                            checkboxes.forEach(cb => {
+                                if (!cb.checked) { cb.click(); checked++; }
+                            });
+                            return `checked ${checked} boxes for "${label}"`;
+                        }
+                        container = container.parentElement;
+                    }
+                    // Don't break — try next match of this label in case the first was wrong
+                }
+            }
+            return `label "${label}" not found or no checkboxes near it`;
         }, rowLabel);
+        console.log(`  ${result}`);
     };
 
+    // Step 3.1: Customer properties tab (active by default)
+    console.log('Setting Customer properties permissions...');
     await checkPermissionRow('New properties');
     await page.waitForTimeout(500);
     await checkPermissionRow('Other');
     await page.waitForTimeout(500);
     await saveScreenshot('PERMISSIONS_CUSTOMER_PROPERTIES');
-    console.log('Customer properties permissions set.');
 
-    // Step 3.2: Click Events tab (within GROUP PERMISSIONS tabs)
+    // Step 3.2: Events tab
     console.log('Switching to Events tab...');
-    // The tabs are near GROUP PERMISSIONS — look for tab-like elements
-    const eventsTab = page.locator('[role="tab"]:has-text("Events"), [class*="tab"]:has-text("Events")').first();
-    if (await eventsTab.count() > 0) {
-        await eventsTab.click();
-    } else {
-        // Fallback: click the Events text that's near the other tab texts (Customer properties, Definitions, etc.)
-        await page.getByText('Events', { exact: true }).click();
-    }
-    await page.waitForTimeout(1000);
+    await clickPermissionTab('Events');
+    await page.waitForTimeout(1500);
 
-    // Step 3.3: Check Get and Set for "New events" and "Other" under Events tab
     console.log('Setting Events permissions...');
     await checkPermissionRow('New events');
     await page.waitForTimeout(500);
     await checkPermissionRow('Other');
     await page.waitForTimeout(500);
     await saveScreenshot('PERMISSIONS_EVENTS');
-    console.log('Events permissions set.');
 
-    // Step 3.4: Click Catalogs tab (within GROUP PERMISSIONS tabs)
+    // Step 3.3: Catalogs tab
     console.log('Switching to Catalogs tab...');
-    const catalogsTab = page.locator('[role="tab"]:has-text("Catalogs"), [class*="tab"]:has-text("Catalogs")').first();
-    if (await catalogsTab.count() > 0) {
-        await catalogsTab.click();
-    } else {
-        await page.getByText('Catalogs', { exact: true }).click();
-    }
-    await page.waitForTimeout(1000);
+    await clickPermissionTab('Catalogs');
+    await page.waitForTimeout(1500);
 
-    // Step 3.5: Check the checkbox for "Action" row under Catalogs tab
     console.log('Setting Catalogs permissions...');
     await checkPermissionRow('Action');
     await page.waitForTimeout(500);
     await saveScreenshot('PERMISSIONS_CATALOGS');
-    console.log('Catalogs permissions set.');
 
-    // Step 3.6: Click "Save Changes" at the top right
+    // Step 3.4: Save Changes
     console.log('Saving permission changes...');
-    // Scroll to top of page to find Save Changes button
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.waitForTimeout(500);
     const saveBtn = page.locator('button:has-text("Save Changes"), button:has-text("Save changes")').first();
