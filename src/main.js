@@ -718,7 +718,7 @@ try {
                     break;
                 }
             }
-        }, label);
+        }, rowLabel);
     };
 
     await checkPermissionRow('New properties');
