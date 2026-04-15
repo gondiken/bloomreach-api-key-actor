@@ -155,7 +155,15 @@ async function handleLoginIfNeeded() {
 
     if (!foundPasswordInput) return; // Already logged in
 
-    console.log('Login page detected.');
+    // Bloomreach now centralizes login at brx.login.bloomreach.com/login.
+    // Note: reCAPTCHA still blocks automated submission, so cookie auth is the only
+    // reliable path. This branch exists mainly as a fallback / diagnostic signal.
+    const currentUrl = page.url();
+    if (currentUrl.includes('brx.login.bloomreach.com')) {
+        console.log('On new Bloomreach centralized login page (brx.login.bloomreach.com).');
+    } else {
+        console.log(`Login page detected at: ${currentUrl}`);
+    }
     await saveScreenshot('LOGIN_PAGE');
 
     const allInputs = await loginFrame.locator('input').all();
@@ -222,9 +230,11 @@ try {
         console.log(`\n=== PHASE 1: Creating new project "${newProjectName}" ===`);
 
         // Step 1.1: Navigate to project creation page
+        // Use 'domcontentloaded' instead of 'networkidle' — Bloomreach's SPA has
+        // persistent background polling/websockets, so networkidle rarely fires.
         console.log('Navigating to project creation page...');
         await page.goto('https://demoapp.bloomreach.com/projects/new', {
-            waitUntil: 'networkidle',
+            waitUntil: 'domcontentloaded',
             timeout: 60000,
         });
 
@@ -234,7 +244,7 @@ try {
         if (!page.url().includes('/projects/new')) {
             console.log('Redirected after login, navigating back to project creation...');
             await page.goto('https://demoapp.bloomreach.com/projects/new', {
-                waitUntil: 'networkidle',
+                waitUntil: 'domcontentloaded',
                 timeout: 60000,
             });
         }
@@ -413,29 +423,41 @@ try {
         await saveScreenshot('CREATE_PROJECT_SUBMITTED');
 
         // Step 1.8: Wait for project to be generated (expect 403 initially)
-        console.log('Project submitted. Waiting 15 seconds for project generation...');
-        await page.waitForTimeout(15000);
+        console.log('Project submitted. Waiting 20 seconds for project generation...');
+        await page.waitForTimeout(20000);
 
-        // Step 1.9: Navigate to the new project's API settings
+        // Step 1.9: Navigate to the new project's API settings and poll for readiness.
+        // New projects can take 30-90s to finish provisioning. We poll the "Project token"
+        // selector rather than waiting for networkidle (which never fires on this SPA).
+        const apiUrl = `https://demoapp.bloomreach.com/p/${newProjectName}/project-settings/api`;
         console.log(`Navigating to new project API settings: /p/${newProjectName}/project-settings/api`);
-        await page.goto(`https://demoapp.bloomreach.com/p/${newProjectName}/project-settings/api`, {
-            waitUntil: 'networkidle',
-            timeout: 60000,
-        });
 
-        // If still 403/loading, retry with increasing waits
-        for (let attempt = 1; attempt <= 3; attempt++) {
-            const bodyCheck = await page.locator('body').innerText().catch(() => '');
-            if (bodyCheck.includes('Project token') || bodyCheck.includes('API')) {
-                console.log('API page loaded successfully.');
-                break;
+        let apiPageReady = false;
+        for (let attempt = 1; attempt <= 6; attempt++) {
+            try {
+                await page.goto(apiUrl, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 45000,
+                });
+            } catch (e) {
+                console.log(`  goto error on attempt ${attempt}: ${e.message.substring(0, 120)}`);
             }
-            console.log(`API page not ready yet (attempt ${attempt}/3), waiting 15 more seconds...`);
-            await page.waitForTimeout(15000);
-            await page.goto(`https://demoapp.bloomreach.com/p/${newProjectName}/project-settings/api`, {
-                waitUntil: 'networkidle',
-                timeout: 60000,
-            });
+
+            // Wait for "Project token" text — the canonical "API page is fully rendered" signal.
+            try {
+                await page.waitForSelector('text=Project token', { timeout: 15000 });
+                apiPageReady = true;
+                console.log(`API page loaded successfully on attempt ${attempt}.`);
+                break;
+            } catch {
+                console.log(`API page not ready yet (attempt ${attempt}/6), waiting 15s before retry...`);
+                await page.waitForTimeout(15000);
+            }
+        }
+
+        if (!apiPageReady) {
+            await saveScreenshot('ERROR_API_PAGE_TIMEOUT');
+            throw new Error(`API settings page did not load for project "${newProjectName}" after 6 attempts`);
         }
 
     } else {
@@ -443,7 +465,7 @@ try {
         console.log(`\n=== Skipping project creation, using existing project: ${projectSlug} ===`);
 
         await page.goto(`https://demoapp.bloomreach.com/p/${projectSlug}/project-settings/api`, {
-            waitUntil: 'networkidle',
+            waitUntil: 'domcontentloaded',
             timeout: 60000,
         });
 
@@ -452,9 +474,16 @@ try {
         // Navigate to API settings if login redirected elsewhere
         if (!page.url().includes('project-settings/api')) {
             await page.goto(`https://demoapp.bloomreach.com/p/${projectSlug}/project-settings/api`, {
-                waitUntil: 'networkidle',
+                waitUntil: 'domcontentloaded',
                 timeout: 30000,
             });
+        }
+
+        // Wait for the page to actually render before moving on
+        try {
+            await page.waitForSelector('text=Project token', { timeout: 30000 });
+        } catch {
+            console.log('Warning: "Project token" text did not appear within 30s on existing project.');
         }
     }
 

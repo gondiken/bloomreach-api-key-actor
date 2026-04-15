@@ -25,7 +25,7 @@
         "cookies": {
             "title": "Session Cookies",
             "type": ["array", "string"],
-            "description": "ALL cookies from a logged-in Bloomreach session INCLUDING httpOnly ones. Use the 'Cookie-Editor' browser extension to export.",
+            "description": "ALL cookies from a logged-in Bloomreach session INCLUDING httpOnly ones. Log in via https://brx.login.bloomreach.com/login, then use the 'Cookie-Editor' browser extension on demoapp.bloomreach.com to export all cookies (the httpOnly 'session' cookie for demoapp.bloomreach.com is required).",
             "editor": "json"
         },
         "keyName": {
