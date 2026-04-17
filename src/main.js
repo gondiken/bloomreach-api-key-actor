@@ -261,7 +261,27 @@ try {
 
         await saveScreenshot('CREATE_PROJECT_PAGE');
 
-        // Step 1.2: Fill project name
+        // Step 1.2: Select "Campaign Agent" account from the Account name dropdown.
+        // Default is "Alper Gondiken" — we need projects under Campaign Agent.
+        console.log('Selecting Campaign Agent account...');
+        const accountDropdown = page.locator('e-select-box:has-text("Alper Gondiken"), e-select-box:has-text("Account name")').first();
+        if (await accountDropdown.count() > 0) {
+            await accountDropdown.click();
+            await page.waitForTimeout(1000);
+            await page.getByText('Campaign Agent', { exact: true }).click();
+            console.log('Selected Campaign Agent account');
+            await page.waitForTimeout(500);
+        } else {
+            // Account dropdown may already show Campaign Agent or use a different selector
+            const alreadyCampaign = await page.locator('text=Campaign Agent').count() > 0;
+            if (alreadyCampaign) {
+                console.log('Campaign Agent account already selected.');
+            } else {
+                console.warn('WARNING: Could not find Account name dropdown to switch workspace.');
+            }
+        }
+
+        // Step 1.3: Fill project name
         console.log(`Filling project name: ${newProjectName}`);
         const projectNameInput = page.locator('input[placeholder="Name your project"]');
         await projectNameInput.waitFor({ timeout: 15000 });
