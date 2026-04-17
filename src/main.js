@@ -400,9 +400,63 @@ try {
                 await page.waitForTimeout(1000);
             }
 
-            // Click the matching option in the dropdown list
-            await page.getByText(sourceProject, { exact: true }).click();
-            console.log(`Selected ${sourceProject} via custom dropdown`);
+            // Click the matching option in the dropdown list.
+            // The display name may differ from the slug (e.g. slug "campaignagent"
+            // → display name "Campaign Agent"), so exact text match can fail.
+            let selectedViaDropdown = false;
+
+            // Strategy 1: exact text match (works when slug === display name, e.g. "temp2")
+            const exactMatch = page.getByText(sourceProject, { exact: true });
+            if (await exactMatch.count() > 0) {
+                await exactMatch.click();
+                console.log(`Selected ${sourceProject} via exact text match`);
+                selectedViaDropdown = true;
+            }
+
+            // Strategy 2: partial/substring match (handles "Name (slug)" format)
+            if (!selectedViaDropdown) {
+                const partialMatch = page.getByText(sourceProject).first();
+                if (await partialMatch.count() > 0) {
+                    await partialMatch.click();
+                    console.log(`Selected "${sourceProject}" via partial text match`);
+                    selectedViaDropdown = true;
+                }
+            }
+
+            // Strategy 3: click first visible filtered dropdown result
+            if (!selectedViaDropdown) {
+                console.log(`Text "${sourceProject}" not found in dropdown, clicking first filtered result...`);
+                await page.waitForTimeout(500);
+                const clickedText = await page.evaluate(() => {
+                    const containers = [
+                        document.querySelector('.cdk-overlay-container'),
+                        ...document.querySelectorAll('[class*="select-box"] [class*="option"], [class*="dropdown"] li'),
+                    ].filter(Boolean);
+                    for (const el of containers) {
+                        const items = el.tagName ? [el, ...el.querySelectorAll('*')] : [el];
+                        for (const item of items) {
+                            if (item.offsetParent !== null &&
+                                !item.matches('input, svg, path') &&
+                                item.innerText?.trim().length > 1 &&
+                                !item.innerText.includes('\n') &&
+                                item.innerText.trim() !== 'Search...') {
+                                item.click();
+                                return item.innerText.trim();
+                            }
+                        }
+                    }
+                    return null;
+                });
+                if (clickedText) {
+                    console.log(`Selected "${clickedText}" from filtered dropdown`);
+                    selectedViaDropdown = true;
+                }
+            }
+
+            if (!selectedViaDropdown) {
+                await saveScreenshot('ERROR_SOURCE_PROJECT');
+                throw new Error(`Could not select source project "${sourceProject}" from dropdown`);
+            }
         }
 
         await page.waitForTimeout(500);
