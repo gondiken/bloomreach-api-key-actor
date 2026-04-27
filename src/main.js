@@ -7,6 +7,7 @@ const input = await Actor.getInput();
 const {
     newProjectName = null,
     sourceProject = 'temp2',
+    workspaceName = 'Campaign Agent',
     projectSlug = null,
     email,
     password,
@@ -261,24 +262,63 @@ try {
 
         await saveScreenshot('CREATE_PROJECT_PAGE');
 
-        // Step 1.2: Select "Campaign Agent" account from the Account name dropdown.
-        // Default is "Alper Gondiken" — we need projects under Campaign Agent.
-        console.log('Selecting Campaign Agent account...');
-        const accountDropdown = page.locator('e-select-box:has-text("Alper Gondiken"), e-select-box:has-text("Account name")').first();
-        if (await accountDropdown.count() > 0) {
+        // Step 1.2: Select target workspace from the "Account name" dropdown.
+        // The dropdown defaults to the logged-in user's personal account; we
+        // need projects under `workspaceName`. Anchor on the "Account name"
+        // label rather than the currently-displayed value so the selector is
+        // independent of whoever is logged in.
+        console.log(`Selecting workspace: ${workspaceName}`);
+
+        // Tag the right e-select-box from the DOM side so we can locate it
+        // unambiguously from Playwright. Returns the dropdown's current text
+        // and whether it's already set to workspaceName.
+        const accountInfo = await page.evaluate((wsName) => {
+            const all = [...document.querySelectorAll('*')];
+            const label = all.find(el =>
+                el.children.length === 0 && el.textContent?.trim() === 'Account name'
+            );
+            if (!label) return { found: false };
+
+            const labelIndex = all.indexOf(label);
+            const selectBoxes = [...document.querySelectorAll('e-select-box')];
+            const dropdown = selectBoxes.find(sb => all.indexOf(sb) > labelIndex);
+            if (!dropdown) return { found: false };
+
+            dropdown.setAttribute('data-test-account-dropdown', 'true');
+            const currentValue = (dropdown.innerText || '').trim();
+            return {
+                found: true,
+                currentValue,
+                alreadyMatches: currentValue.includes(wsName),
+            };
+        }, workspaceName);
+
+        if (!accountInfo.found) {
+            // No "Account name" label — likely a single-workspace user, or
+            // the form layout changed. Don't fail the run; just continue.
+            console.warn('No "Account name" label found on /projects/new — skipping workspace selection.');
+        } else if (accountInfo.alreadyMatches) {
+            console.log(`Workspace already set to ${workspaceName} (dropdown shows: "${accountInfo.currentValue}"), skipping.`);
+        } else {
+            console.log(`Account dropdown currently shows: "${accountInfo.currentValue}". Switching to ${workspaceName}.`);
+            const accountDropdown = page.locator('e-select-box[data-test-account-dropdown="true"]');
             await accountDropdown.click();
             await page.waitForTimeout(1000);
-            await page.getByText('Campaign Agent', { exact: true }).click();
-            console.log('Selected Campaign Agent account');
-            await page.waitForTimeout(500);
-        } else {
-            // Account dropdown may already show Campaign Agent or use a different selector
-            const alreadyCampaign = await page.locator('text=Campaign Agent').count() > 0;
-            if (alreadyCampaign) {
-                console.log('Campaign Agent account already selected.');
-            } else {
-                console.warn('WARNING: Could not find Account name dropdown to switch workspace.');
+            await saveScreenshot('ACCOUNT_DROPDOWN_OPENED');
+
+            await page.getByText(workspaceName, { exact: true }).first().click();
+            await page.waitForTimeout(800);
+
+            // Verify the dropdown's displayed value actually changed.
+            const newValue = (await accountDropdown.innerText()).trim();
+            await saveScreenshot('ACCOUNT_SELECTED');
+            if (!newValue.includes(workspaceName)) {
+                await saveScreenshot('ERROR_WORKSPACE_NOT_SELECTED');
+                throw new Error(
+                    `Workspace selection failed. Expected "${workspaceName}", dropdown shows "${newValue}".`
+                );
             }
+            console.log(`Workspace set to ${workspaceName} (dropdown now shows: "${newValue}").`);
         }
 
         // Step 1.3: Fill project name

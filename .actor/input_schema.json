@@ -16,6 +16,13 @@
             "editor": "textfield",
             "default": "temp2"
         },
+        "workspaceName": {
+            "title": "Workspace / Account name",
+            "type": "string",
+            "description": "Bloomreach account that should own newly created projects. Selected from the 'Account name' dropdown on /projects/new before filling the project name. Defaults to 'Campaign Agent'.",
+            "editor": "textfield",
+            "default": "Campaign Agent"
+        },
         "projectSlug": {
             "title": "Existing Project Slug",
             "type": "string",

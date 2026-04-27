@@ -38,11 +38,12 @@ Loads cookies into browser context. Supports both array (Cookie-Editor JSON expo
 ### Phase 1: Project creation (optional)
 Only runs if `newProjectName` is provided. Creates a Sandbox project cloned from `sourceProject` (default: `temp2`).
 1. Navigate to `/projects/new`
-2. Fill project name
-3. Open `e-select-box` dropdown → select "Sandbox"
-4. Select "Data structure from existing project" → search and select source project
-5. Click Next → Create project
-6. Wait 20s for project generation, then navigate to API settings. Polls the "Project token" selector with up to 6 attempts (15s wait between tries) to handle slow provisioning.
+2. Select target workspace from "Account name" dropdown (default: `Campaign Agent`, configurable via `workspaceName`). Tags the dropdown via DOM mutation, reads its current value, only clicks if it doesn't already match — and **verifies the displayed value changed** after clicking. Throws if verification fails. Skips silently for single-workspace users with no "Account name" label.
+3. Fill project name
+4. Open `e-select-box` dropdown → select "Sandbox"
+5. Select "Data structure from existing project" → search and select source project
+6. Click Next → Create project
+7. Wait 20s for project generation, then navigate to API settings. Polls the "Project token" selector with up to 6 attempts (15s wait between tries) to handle slow provisioning.
 
 ### Phase 2: API key creation
 1. Extract **project token** (UUID from readonly input)
@@ -90,16 +91,17 @@ Sets Get/Set permissions on three tabs, then saves:
 
 ## Debugging
 Screenshots saved to Apify KV store at every step:
-- Phase 1: `CREATE_PROJECT_PAGE`, `DROPDOWN_OPENED`, `PROJECT_TYPE_SELECTED`, `BEFORE_EXISTING_PROJECT`, `CREATE_PROJECT_FILLED`, `CREATE_PROJECT_STEP2`, `CREATE_PROJECT_SUBMITTED`
+- Phase 1: `CREATE_PROJECT_PAGE`, `ACCOUNT_DROPDOWN_OPENED`, `ACCOUNT_SELECTED`, `DROPDOWN_OPENED`, `PROJECT_TYPE_SELECTED`, `BEFORE_EXISTING_PROJECT`, `CREATE_PROJECT_FILLED`, `CREATE_PROJECT_STEP2`, `CREATE_PROJECT_SUBMITTED`
 - Phase 2: `API_PAGE`, `GROUP_DROPDOWN_OPENED`, `NEW_GROUP_MODAL`, `PRIVATE_ACCESS_SELECTED`, `GROUP_NAME_FILLED`, `GROUP_CREATED`, `ADD_KEY_MODAL`, `KEY_NAME_FILLED`, `AFTER_KEY_CREATE`, `AFTER_CLOSE`
 - Phase 3: `PERMISSIONS_CUSTOMER_PROPERTIES`, `PERMISSIONS_EVENTS`, `PERMISSIONS_CATALOGS`, `PERMISSIONS_SAVED`
-- Errors: `ERROR_SCREENSHOT`, `ERROR_BLANK_PAGE`, `ERROR_NO_TOKEN`, `ERROR_NO_SECRET`, `ERROR_NO_KEY_ID`, `ERROR_API_PAGE_TIMEOUT`
+- Errors: `ERROR_SCREENSHOT`, `ERROR_BLANK_PAGE`, `ERROR_NO_TOKEN`, `ERROR_NO_SECRET`, `ERROR_NO_KEY_ID`, `ERROR_API_PAGE_TIMEOUT`, `ERROR_WORKSPACE_NOT_SELECTED`
 
 ## Input fields
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `newProjectName` | No | — | Name for new project (triggers Phase 1) |
 | `sourceProject` | No | `temp2` | Project to clone data structure from |
+| `workspaceName` | No | `Campaign Agent` | Account/workspace selected in the "Account name" dropdown during Phase 1 |
 | `projectSlug` | No | — | Use existing project (skip Phase 1) |
 | `cookies` | Yes* | — | Exported browser cookies (array or string) |
 | `keyName` | No | `forge_run` | Name for API key and Private group |
