@@ -452,8 +452,16 @@ try {
             }
             await page.waitForTimeout(500);
 
-            // Type in the search field to filter
-            const searchInput = page.locator('input[placeholder="Search..."]');
+            // Type in the search field to filter.
+            // More than one "Search..." input can be in the DOM at once (a stale
+            // select-box popover left over from an earlier dropdown plus the one
+            // we just opened), so a bare placeholder match resolves to >1 element
+            // and .fill() throws a strict-mode violation. Target the active
+            // (focused) input, falling back to the last visible one.
+            let searchInput = page.locator('input[placeholder="Search..."].focused');
+            if (await searchInput.count() === 0) {
+                searchInput = page.locator('input[placeholder="Search..."]:visible').last();
+            }
             if (await searchInput.count() > 0) {
                 console.log('Typing in search field...');
                 await searchInput.fill(sourceProject);
